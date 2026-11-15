@@ -17,6 +17,8 @@ button.ghost{background:transparent;border:1px solid var(--line);color:var(--ink
 #log{font:12px/1.6 ui-monospace,monospace;color:var(--muted);white-space:pre-wrap;word-break:break-all}.ok{color:var(--mint)}.err{color:var(--red)}
 #done{display:none}#done a.dl{display:inline-block;margin-top:8px;padding:12px 18px;background:var(--mint);color:#00261b;border-radius:10px;font-weight:700;text-decoration:none}
 .net{font-size:12px;color:var(--muted)}a{color:var(--gold)}
+details.faq{border-top:1px solid var(--line);padding:10px 0}details.faq summary{cursor:pointer;font-weight:600}details.faq p,details.faq li{color:var(--muted);font-size:14px}
+#orders a{word-break:break-all}
 @media(max-width:560px){.tiers{grid-template-columns:1fr}}
 </style>
 </head>
@@ -45,6 +47,28 @@ button.ghost{background:transparent;border:1px solid var(--line);color:var(--ink
   <div class="card" id="done"><h2>✅ Delivered 已交付</h2><p>Your playable ad is ready. 广告已生成：</p><a class="dl" id="dlLink" href="#">Download HTML 下载</a>
     <p class="net">Save this link — it's unique to your order and works only with the secret key in it. 链接是你订单专属的，请保存。</p><p class="net" id="txLine"></p></div>
 
+
+  <div class="card" id="ordersCard" style="display:none"><h2>My orders 我的订单（本浏览器）</h2><div id="orders" class="net"></div></div>
+
+  <div class="card"><h2>购买指南 FAQ</h2>
+    <details class="faq"><summary>1. 怎么获得 BSC 链上的 USDT？</summary>
+      <ol><li>在币安 (Binance)、OKX 等交易所用人民币 C2C 或其他方式买入 USDT。</li>
+      <li>提币时<b>网络一定选 “BNB Smart Chain (BEP20)”</b>，地址填你自己钱包的 0x 开头地址。不要选 ERC20 或 TRC20，选错网络会到不了账。</li>
+      <li>本页收的是 BSC 上的 USDT（合约 0x55d3…7955，也叫 BSC-USD）。如果钱包里显示的是这个代币，就可以直接付款。</li></ol></details>
+    <details class="faq"><summary>2. 还需要准备什么？</summary>
+      <p>钱包里还要有一点 <b>BNB</b> 付手续费 (gas)。授权加付款两笔交易，通常一共不到 0.0001 BNB，备 0.001 BNB 就绰绰有余。从交易所提 BNB 时同样选 BEP20 网络。</p></details>
+    <details class="faq"><summary>3. 支持哪些钱包？</summary>
+      <p>任何支持 BNB Smart Chain 的 EVM 钱包都可以：<b>MetaMask、OKX Wallet、Binance Web3 钱包、Trust Wallet、TokenPocket、Bitget Wallet</b> 等。</p>
+      <p>电脑：装好浏览器插件后刷新本页。手机：在钱包 App 内置的「浏览器 / DApp」里打开本页链接。页面会自动切到 BSC 主网 (chainId 56)。</p></details>
+    <details class="faq"><summary>4. 为什么钱包要确认两次？安全吗？</summary>
+      <p>第一次是<b>授权</b>，额度刚好等于套餐价格，不会多授权；第二次是<b>付款</b>。钱由合约直接转进卖家钱包，合约本身不存钱。合约源码已公开验证：<a href="https://repo.sourcify.dev/56/0x6ee40eD93128db7022924980272101f9936bd334" target="_blank" rel="noopener">Sourcify</a> · <a href="https://bscscan.com/address/0x6ee40eD93128db7022924980272101f9936bd334" target="_blank" rel="noopener">BscScan</a>。</p></details>
+    <details class="faq"><summary>5. 付完款多久能拿到？拿到的是什么？</summary>
+      <p>链上确认约 5 个区块，一般十几秒到一分钟。之后本页会自动出现下载按钮。下载的是一个单文件 HTML 试玩广告，里面已经换成你的商店链接，可以直接上传到 Meta、Google、AppLovin、Unity 等投放平台。</p></details>
+    <details class="faq"><summary>6. 页面关掉了 / 没看到下载链接怎么办？</summary>
+      <p>用同一个浏览器重新打开本页，上方「我的订单」会列出你的订单和下载链接。如果还有问题，请带上交易哈希 (tx hash) 到 <a href="https://github.com/lyp1314/playable-ads-portfolio/issues" target="_blank" rel="noopener">GitHub Issues</a> 留言。链上付款无法撤回，但如果没交付成功，我们会人工处理或退款。</p></details>
+    <details class="faq"><summary>7. 三个套餐有什么区别？</summary>
+      <p>三个套餐交付的文件相同，区别只在授权范围。Basic $5 用于测试或单次投放；Standard $7 授权 1 款应用商业使用；Premium $9 不限应用、不限渠道商业使用。</p></details>
+  </div>
   <div class="card"><h2>Status 状态</h2><div id="log">Ready.</div></div>
 </main>
 <script src="./vendor/ethers.umd.min.js"></script>
@@ -154,6 +178,26 @@ $("payBtn").onclick = async () => {
   } catch (e) { log("Error: " + (e.shortMessage || e.reason || e.message), "err"); $("payBtn").disabled = false; }
 };
 refreshPrice();
+
+// "My orders": recover download links for orders made in this browser
+(async () => {
+  const keys = Object.keys(localStorage).filter(k => k.startsWith("pp:"));
+  if (!keys.length || !NET || !NET.api) return;
+  const box = $("orders"); let shown = 0;
+  for (const k of keys.slice(-10)) {
+    try {
+      const o = JSON.parse(localStorage.getItem(k)); if ((o.net || C.active) !== netKey) continue;
+      const s = await (await fetch(NET.api + "/status/" + o.orderId)).json();
+      if (!s.paid) continue;
+      const div = document.createElement("div"); div.style.margin = "6px 0";
+      const label = `${o.game} · tier ${o.tier} · ${o.orderId.slice(0, 10)}… `;
+      if (s.delivered) { const a = document.createElement("a"); a.href = `${NET.api}/download/${o.orderId}?k=${o.nonce}`; a.textContent = "Download 下载"; div.append(label, a); }
+      else div.append(label + "paid, delivering… 已付款，交付中");
+      box.appendChild(div); shown++;
+    } catch {}
+  }
+  if (shown) $("ordersCard").style.display = "block";
+})();
 </script>
 </body>
 </html>

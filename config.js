@@ -29,8 +29,8 @@ window.PLAYABLE_PAY_CONFIG = {
     { id: "lumen-tiles",  name: "Lumen Tiles — match-3 / 三消" },
   ],
   tiers: [
-    { id: 1, name: "Basic",    usd: 5, desc: "1 template, your store link, all ad networks" },
-    { id: 2, name: "Standard", usd: 7, desc: "Basic + priority delivery" },
-    { id: 3, name: "Premium",  usd: 9, desc: "Standard + commercial license" },
+    { id: 1, name: "Basic",    usd: 5, desc: "1 template + your store link · testing / one campaign" },
+    { id: 2, name: "Standard", usd: 7, desc: "Same file · commercial license, 1 app" },
+    { id: 3, name: "Premium",  usd: 9, desc: "Same file · commercial license, unlimited apps" },
   ],
 };

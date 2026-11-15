@@ -48,6 +48,16 @@
     th { color: var(--muted); font-weight: 600; }
     .spec-list { margin: 0; padding-left: 18px; color: var(--muted); }
     footer { color: var(--muted); font-size: 13px; padding: 8px 0 40px; border-top: 1px solid var(--line); }
+    .buy-cta { display:inline-block; margin-top:16px; padding:12px 20px; border-radius:12px; background:var(--gold); color:#1a1300; font-weight:800; text-decoration:none; }
+    .buy-cta:hover { filter:brightness(1.08); }
+    .buy-small { display:inline-block; margin-top:10px; font-weight:700; font-size:14px; }
+    .buy { background:var(--paper); border:1px solid var(--gold); border-radius:20px; padding:24px; }
+    .tiers { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:16px 0; }
+    .tier { border:1px solid var(--line); border-radius:14px; padding:14px; }
+    .tier b { display:block; font-size:28px; color:var(--gold); }
+    .tier span { color:var(--muted); font-size:14px; }
+    .steps { color:var(--muted); margin:8px 0 0; padding-left:18px; }
+    @media (max-width: 700px) { .tiers { grid-template-columns:1fr; } }
     [data-lang="en"] .zh, [data-lang="zh"] .en { display: none; }
     @media (max-width: 900px) { .grid { grid-template-columns: 1fr; width: min(420px, 100%); margin-left: auto; margin-right: auto; } }
   </style>
@@ -60,6 +70,8 @@
       <h1 class="en">Playable Ads Portfolio</h1>
       <p class="lede zh">三则原创单文件 HTML 试玩广告：排序谜题、拔钉救援、三消。竖屏 9:16，约 35–45 秒，含提示手、一次高光和结束卡 Install。</p>
       <p class="lede en">Three original single-file HTML playable ads — a sort puzzle, a pin-pull rescue, and a match-3. Portrait 9:16, about 35–45 seconds, with a hint hand, one highlight, and an end-card Install.</p>
+      <a class="buy-cta zh" href="buy.html">用 USDT (BSC) 立即购买 · $5 起</a>
+      <a class="buy-cta en" href="buy.html">Buy now with USDT (BSC) · from $5</a>
     </div>
     <div class="lang" role="group" aria-label="Language">
       <button type="button" data-set="zh" aria-pressed="true">中文</button>
@@ -75,6 +87,8 @@
         <div class="frame"><iframe src="demos/chroma-wells.html" title="Chroma Wells playable ad" loading="lazy"></iframe></div>
         <p class="note zh">把每个井里的光球倒成同一颜色。暖身一局后进入「DEEP WELL」。倒满一井会爆出高光。</p>
         <p class="note en">Pour orbs until every well holds a single color. A short warm-up leads into “DEEP WELL,” with a burst when a well is completed.</p>
+        <a class="buy-small zh" href="buy.html?game=chroma-wells">购买此模板 →</a>
+        <a class="buy-small en" href="buy.html?game=chroma-wells">Buy this template →</a>
       </article>
       <article class="phone">
         <h2>Bolt Haven</h2>
@@ -83,6 +97,8 @@
         <div class="frame"><iframe src="demos/bolt-haven.html" title="Bolt Haven playable ad" loading="lazy"></iframe></div>
         <p class="note zh">按顺序拔掉螺栓，让萤光飞到窗边。第二间先放下木架，再拔红螺栓，石块砸在架上是高光；顺序错了会差一点。</p>
         <p class="note en">Pull bolts in order so the glow can reach the window. In the loft, drop the shelf first; the stone slamming onto it is the highlight. The wrong bolt ends in a near miss.</p>
+        <a class="buy-small zh" href="buy.html?game=bolt-haven">购买此模板 →</a>
+        <a class="buy-small en" href="buy.html?game=bolt-haven">Buy this template →</a>
       </article>
       <article class="phone">
         <h2>Lumen Tiles</h2>
@@ -91,8 +107,29 @@
         <div class="frame"><iframe src="demos/lumen-tiles.html" title="Lumen Tiles playable ad" loading="lazy"></iframe></div>
         <p class="note zh">交换相邻符文，打破四枚蜡封。四连或五连会清行/清色，并打出一次「AURORA」慢动作高光。12 步内完成。</p>
         <p class="note en">Swap adjacent sigils to crack four wax seals. A 4- or 5-match fires a row or color clear and an “AURORA” slow-motion highlight. Twelve moves.</p>
+        <a class="buy-small zh" href="buy.html?game=lumen-tiles">购买此模板 →</a>
+        <a class="buy-small en" href="buy.html?game=lumen-tiles">Buy this template →</a>
       </article>
     </div>
+
+    <section class="buy" id="buy">
+      <h3 class="zh">用 USDT (BSC) 立即购买</h3>
+      <h3 class="en">Buy now with USDT (BSC)</h3>
+      <p class="note zh">选一个游戏模板，填上你的 App Store / Google Play 链接，用 BNB 智能链上的 USDT 付款。链上确认后自动生成你的专属单文件 HTML 试玩广告，当场下载，无需等待人工。</p>
+      <p class="note en">Pick a game template, paste your App Store / Google Play link and pay in USDT on BNB Smart Chain. Once the payment confirms, your single-file HTML playable is generated automatically and you download it right away. No waiting on a human.</p>
+      <div class="tiers">
+        <div class="tier"><span>Basic</span><b>$5</b><span class="zh">1 个模板 + 你的商店链接，用于测试或单次投放</span><span class="en">1 template with your store link, for testing or one campaign</span></div>
+        <div class="tier"><span>Standard</span><b>$7</b><span class="zh">同上，含 1 款应用的商业使用授权</span><span class="en">Same file, commercial license for one app</span></div>
+        <div class="tier"><span>Premium</span><b>$9</b><span class="zh">同上，商业授权不限应用、不限渠道</span><span class="en">Same file, commercial license for unlimited apps and networks</span></div>
+      </div>
+      <p class="note zh">可选模板：Chroma Wells（排序）、Bolt Haven（拔钉）、Lumen Tiles（三消）。均支持 Meta、Google、AppLovin、Unity 和 MRAID。</p>
+      <p class="note en">Templates: Chroma Wells (sort), Bolt Haven (pin-pull), Lumen Tiles (match-3). Each one works on Meta, Google, AppLovin, Unity and MRAID.</p>
+      <ol class="steps zh"><li>选套餐和模板</li><li>连接钱包（MetaMask / OKX / Binance Web3 / Trust）</li><li>授权并支付 USDT</li><li>自动交付下载链接</li></ol>
+      <ol class="steps en"><li>Pick a package and template</li><li>Connect a wallet (MetaMask / OKX / Binance Web3 / Trust)</li><li>Approve and pay in USDT</li><li>Get your download link automatically</li></ol>
+      <a class="buy-cta zh" href="buy.html">前往购买页 →</a>
+      <a class="buy-cta en" href="buy.html">Go to checkout →</a>
+      <p class="note">Contract 合约: <a href="https://bscscan.com/address/0x6ee40eD93128db7022924980272101f9936bd334" target="_blank" rel="noopener">0x6ee4…d334</a> · <a href="https://repo.sourcify.dev/56/0x6ee40eD93128db7022924980272101f9936bd334" target="_blank" rel="noopener">verified source (Sourcify)</a> · <span class="zh">付款直接进入卖家钱包，合约不托管资金</span><span class="en">payments go straight to the seller's wallet; the contract holds no funds</span></p>
+    </section>
 
     <section>
       <h3 class="zh">规格</h3>
@@ -138,8 +175,8 @@
     </section>
   </main>
   <footer>
-    <p class="zh">Ora Playables 演示包。美术、文案与代码均为原创，仅参考常见试玩广告的结构。演示 Install 不会跳到真实应用商店。</p>
-    <p class="en">Ora Playables demo pack. Art, copy, and code are original; only the playable-ad structure is used as a reference. The Install button does not open a live store listing.</p>
+    <p class="zh">Ora Playables 演示包。美术、文案与代码均为原创，仅参考常见试玩广告的结构。演示 Install 不会跳到真实应用商店；购买后交付的版本会跳到你的商店链接。</p>
+    <p class="en">Ora Playables demo pack. Art, copy, and code are original; only the playable-ad structure is used as a reference. In these demos the Install button does not open a live store listing; purchased copies open your store link.</p>
   </footer>
   <script>
     const root = document.body;
