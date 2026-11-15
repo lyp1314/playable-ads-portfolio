@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ora Playables — Playable Ads Portfolio</title>
+  <style>
+    :root {
+      --bg: #0e1016;
+      --paper: #161924;
+      --ink: #efece6;
+      --muted: #9aa0b3;
+      --line: #2a3040;
+      --gold: #e4b84a;
+      --mint: #3ddeb0;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", system-ui, sans-serif; }
+    body { line-height: 1.55; }
+    a { color: var(--gold); }
+    header, main, footer { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }
+    header { padding: 36px 0 12px; display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+    .brand { font-weight: 800; letter-spacing: 0.04em; font-size: 14px; color: var(--gold); }
+    h1 { font-size: clamp(32px, 5vw, 52px); line-height: 1.1; margin: 8px 0 12px; }
+    .lede { max-width: 640px; color: var(--muted); margin: 0; }
+    .lang { display: flex; gap: 8px; }
+    .lang button {
+      background: transparent; color: var(--muted); border: 1px solid var(--line);
+      border-radius: 999px; padding: 8px 14px; cursor: pointer; font: inherit;
+    }
+    .lang button[aria-pressed="true"] { color: var(--bg); background: var(--gold); border-color: var(--gold); }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin: 36px 0 48px; }
+    .phone {
+      background: var(--paper); border: 1px solid var(--line); border-radius: 28px; padding: 16px 16px 20px;
+    }
+    .phone h2 { margin: 0 0 4px; font-size: 20px; }
+    .meta { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+    .frame {
+      aspect-ratio: 9 / 16; width: 100%; border-radius: 20px; overflow: hidden;
+      background: #000; border: 1px solid var(--line);
+    }
+    .frame iframe { width: 100%; height: 100%; border: 0; display: block; }
+    .note { margin: 12px 0 0; color: var(--muted); font-size: 14px; }
+    section { margin: 0 0 48px; }
+    h3 { font-size: 22px; margin: 0 0 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    .spec-list { margin: 0; padding-left: 18px; color: var(--muted); }
+    footer { color: var(--muted); font-size: 13px; padding: 8px 0 40px; border-top: 1px solid var(--line); }
+    [data-lang="en"] .zh, [data-lang="zh"] .en { display: none; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; width: min(420px, 100%); margin-left: auto; margin-right: auto; } }
+  </style>
+</head>
+<body data-lang="zh">
+  <header>
+    <div>
+      <div class="brand">ORA PLAYABLES</div>
+      <h1 class="zh">可试玩广告作品集</h1>
+      <h1 class="en">Playable Ads Portfolio</h1>
+      <p class="lede zh">三则原创单文件 HTML 试玩广告：排序谜题、拔钉救援、三消。竖屏 9:16，约 35–45 秒，含提示手、一次高光和结束卡 Install。</p>
+      <p class="lede en">Three original single-file HTML playable ads — a sort puzzle, a pin-pull rescue, and a match-3. Portrait 9:16, about 35–45 seconds, with a hint hand, one highlight, and an end-card Install.</p>
+    </div>
+    <div class="lang" role="group" aria-label="Language">
+      <button type="button" data-set="zh" aria-pressed="true">中文</button>
+      <button type="button" data-set="en" aria-pressed="false">EN</button>
+    </div>
+  </header>
+  <main>
+    <div class="grid">
+      <article class="phone">
+        <h2>Chroma Wells</h2>
+        <p class="meta zh">排序谜题 · Canvas 2D · 24.5 KB</p>
+        <p class="meta en">Sort puzzle · Canvas 2D · 24.5 KB</p>
+        <div class="frame"><iframe src="demos/chroma-wells.html" title="Chroma Wells playable ad" loading="lazy"></iframe></div>
+        <p class="note zh">把每个井里的光球倒成同一颜色。暖身一局后进入「DEEP WELL」。倒满一井会爆出高光。</p>
+        <p class="note en">Pour orbs until every well holds a single color. A short warm-up leads into “DEEP WELL,” with a burst when a well is completed.</p>
+      </article>
+      <article class="phone">
+        <h2>Bolt Haven</h2>
+        <p class="meta zh">拔钉救援 · Canvas 2D · 21.5 KB</p>
+        <p class="meta en">Pin-pull rescue · Canvas 2D · 21.5 KB</p>
+        <div class="frame"><iframe src="demos/bolt-haven.html" title="Bolt Haven playable ad" loading="lazy"></iframe></div>
+        <p class="note zh">按顺序拔掉螺栓，让萤光飞到窗边。第二间先放下木架，再拔红螺栓，石块砸在架上是高光；顺序错了会差一点。</p>
+        <p class="note en">Pull bolts in order so the glow can reach the window. In the loft, drop the shelf first; the stone slamming onto it is the highlight. The wrong bolt ends in a near miss.</p>
+      </article>
+      <article class="phone">
+        <h2>Lumen Tiles</h2>
+        <p class="meta zh">三消 · Canvas 2D · 24.1 KB</p>
+        <p class="meta en">Match-3 · Canvas 2D · 24.1 KB</p>
+        <div class="frame"><iframe src="demos/lumen-tiles.html" title="Lumen Tiles playable ad" loading="lazy"></iframe></div>
+        <p class="note zh">交换相邻符文，打破四枚蜡封。四连或五连会清行/清色，并打出一次「AURORA」慢动作高光。12 步内完成。</p>
+        <p class="note en">Swap adjacent sigils to crack four wax seals. A 4- or 5-match fires a row or color clear and an “AURORA” slow-motion highlight. Twelve moves.</p>
+      </article>
+    </div>
+
+    <section>
+      <h3 class="zh">规格</h3>
+      <h3 class="en">Specs</h3>
+      <table>
+        <thead>
+          <tr>
+            <th class="zh">项目</th><th class="en">Item</th>
+            <th class="zh">约定</th><th class="en">Spec</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="zh">画幅</td><td class="en">Frame</td><td colspan="2">720×1280 逻辑分辨率，按 9:16 等比缩放，两侧留边</td></tr>
+          <tr><td class="zh">体积</td><td class="en">Size</td><td colspan="2">单文件 HTML，全部图音由代码生成；均远低于 Meta 2 MB 上限</td></tr>
+          <tr><td class="zh">资源</td><td class="en">Assets</td><td colspan="2">无外链、无网络请求；音效为 Web Audio 合成</td></tr>
+          <tr><td class="zh">流程</td><td class="en">Flow</td><td colspan="2">提示手 → 首次点击后开表与出声 → 核心玩法 + 一次高光 → 胜利 / 差一点结束卡</td></tr>
+          <tr><td class="zh">空闲</td><td class="en">Idle</td><td colspan="2">2.5 秒无操作再出示提示手；10 秒无操作进入结束卡</td></tr>
+          <tr><td class="zh">CTA</td><td class="en">CTA</td><td colspan="2">常驻 Install 条 + 结束卡按钮；支持 Meta / Google / MRAID，否则 window.open</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h3 class="zh">支持的投放渠道接口</h3>
+      <h3 class="en">Supported network install hooks</h3>
+      <table>
+        <thead>
+          <tr>
+            <th class="zh">渠道</th><th class="en">Network</th>
+            <th>Install</th>
+            <th class="zh">说明</th><th class="en">Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="2">Meta / Moloco</td><td><code>FbPlayableAd.onCTAClick()</code></td><td class="zh">检测到 SDK 时走此调用</td><td class="en">Used when the SDK is present</td></tr>
+          <tr><td colspan="2">Google</td><td><code>ExitApi.exit()</code></td><td class="zh">用于 App Campaigns 的 HTML5 试玩</td><td class="en">For App Campaign HTML5 playables</td></tr>
+          <tr><td colspan="2">AppLovin / Unity / MRAID</td><td><code>mraid.open(store)</code></td><td class="zh">若容器仍在 loading，会等到 ready</td><td class="en">Waits for ready when the container is still loading</td></tr>
+          <tr><td class="zh">本地预览</td><td class="en">Local preview</td><td><code>window.open(store)</code></td><td class="zh">演示店铺链接默认为本作品集首页，接单时替换为商店地址</td><td class="en">The demo store link points at this index; replace it with store URLs for production</td></tr>
+        </tbody>
+      </table>
+      <p class="note zh">打包上限与启动时序（例如 Meta 单 HTML 2 MB、部分 MRAID 要等可见才开表）见 README.md。</p>
+      <p class="note en">Package size caps and start timing (for example Meta’s 2 MB HTML cap, or MRAID waiting until viewable) are documented in README.md.</p>
+    </section>
+  </main>
+  <footer>
+    <p class="zh">Ora Playables 演示包。美术、文案与代码均为原创，仅参考常见试玩广告的结构。演示 Install 不会跳到真实应用商店。</p>
+    <p class="en">Ora Playables demo pack. Art, copy, and code are original; only the playable-ad structure is used as a reference. The Install button does not open a live store listing.</p>
+  </footer>
+  <script>
+    const root = document.body;
+    const buttons = [...document.querySelectorAll(".lang button")];
+    function setLang(lang) {
+      root.dataset.lang = lang;
+      document.documentElement.lang = lang === "zh" ? "zh-Hans" : "en";
+      buttons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.set === lang)));
+    }
+    buttons.forEach((b) => b.addEventListener("click", () => setLang(b.dataset.set)));
+  </script>
+</body>
+</html>

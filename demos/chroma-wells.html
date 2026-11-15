@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>Chroma Wells</title>
+  <style>
+    html, body {
+      margin: 0; height: 100%; overflow: hidden; background: #0c0d14;
+      touch-action: none; user-select: none; -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    canvas { display: block; position: absolute; touch-action: none; }
+  </style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script>
+(() => {
+  "use strict";
+
+  const W = 720, H = 1280;
+  const STORE_URL = 'https://lyp1314.github.io/playable-ads-portfolio/';
+  const ROUND_CAP = 42;
+  const HINT_AFTER = 2.5;
+  const IDLE_TIMEOUT = 10;
+  const CAP = 4;
+  const PALETTE = [
+    { fill: "#ff6b6b", deep: "#c43c3c", name: "coral" },
+    { fill: "#f4c430", deep: "#c49212", name: "gold" },
+    { fill: "#3ddeb0", deep: "#1e9a78", name: "mint" },
+    { fill: "#7b8cff", deep: "#3d4ec4", name: "iris" },
+  ];
+
+  /* -------- install adapter (networks + fallback) -------- */
+  function installCTA() {
+    try {
+      if (window.FbPlayableAd && typeof window.FbPlayableAd.onCTAClick === "function") {
+        window.FbPlayableAd.onCTAClick();
+        return "meta";
+      }
+      if (window.ExitApi && typeof window.ExitApi.exit === "function") {
+        window.ExitApi.exit();
+        return "google";
+      }
+      if (window.mraid && typeof window.mraid.open === "function") {
+        const open = () => window.mraid.open(absoluteStore());
+        if (typeof window.mraid.getState === "function" && window.mraid.getState() === "loading") {
+          window.mraid.addEventListener("ready", open);
+        } else {
+          open();
+        }
+        return "mraid";
+      }
+    } catch (err) { /* fall through */ }
+    window.open(absoluteStore(), "_blank");
+    return "fallback";
+  }
+  function absoluteStore() {
+    try { return new URL(STORE_URL, window.location.href).href; }
+    catch (e) { return STORE_URL; }
+  }
+
+  /* -------- tiny synth (no media files) -------- */
+  const SFX = (() => {
+    let ctx = null, gain = null, muted = false, armed = false;
+    function boot() {
+      if (!ctx) {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        gain = ctx.createGain();
+        gain.gain.value = muted ? 0 : 0.9;
+        gain.connect(ctx.destination);
+      }
+      if (ctx.state === "suspended") ctx.resume();
+      armed = true;
+    }
+    function tone(freq, dur, type, vol, slide) {
+      if (muted || !armed) return;
+      boot();
+      const t = ctx.currentTime;
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = type || "sine";
+      o.frequency.setValueAtTime(freq, t);
+      if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + dur);
+      g.gain.setValueAtTime(vol || 0.08, t);
+      g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+      o.connect(g); g.connect(gain);
+      o.start(t); o.stop(t + dur + 0.02);
+    }
+    return {
+      boot,
+      pour() { tone(420, 0.12, "sine", 0.06, 280); },
+      pop() { tone(660, 0.16, "triangle", 0.07); setTimeout(() => tone(880, 0.18, "triangle", 0.05), 70); },
+      deny() { tone(180, 0.16, "square", 0.04); },
+      win() { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.28, "sine", 0.07), i * 90)); },
+      almost() { tone(392, 0.22, "sine", 0.07, 220); setTimeout(() => tone(247, 0.35, "sine", 0.06), 180); },
+      toggle() {
+        muted = !muted;
+        if (gain) gain.gain.value = muted ? 0 : 0.9;
+        return muted;
+      },
+      muted: () => muted,
+    };
+  })();
+
+  /* -------- canvas fit (9:16 letterbox) -------- */
+  const canvas = document.getElementById("stage");
+  const ctx = canvas.getContext("2d");
+  let scale = 1, ox = 0, oy = 0;
+
+  function fit() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    const cssW = W * scale, cssH = H * scale;
+    ox = (window.innerWidth - cssW) / 2;
+    oy = (window.innerHeight - cssH) / 2;
+    canvas.style.width = cssW + "px";
+    canvas.style.height = cssH + "px";
+    canvas.style.left = ox + "px";
+    canvas.style.top = oy + "px";
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener("resize", fit);
+  fit();
+
+  function clientToLogical(cx, cy) {
+    const r = canvas.getBoundingClientRect();
+    return { x: ((cx - r.left) / r.width) * W, y: ((cy - r.top) / r.height) * H };
+  }
+  function logicalToClient(lx, ly) {
+    const r = canvas.getBoundingClientRect();
+    return { x: r.left + (lx / W) * r.width, y: r.top + (ly / H) * r.height };
+  }
+
+  /* -------- easing / time -------- */
+  const ease = {
+    outBack: (t) => { const c = 1.70158; return (--t) * t * ((c + 1) * t + c) + 1; },
+    inOut: (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2),
+    out: (t) => 1 - (1 - t) * (1 - t),
+  };
+  let tweens = [];
+  function tween(obj, to, dur, opt) {
+    const from = {}, keys = Object.keys(to);
+    keys.forEach((k) => (from[k] = obj[k]));
+    tweens.push({
+      obj, from, to, dur, t: 0,
+      ease: (opt && opt.ease) || ease.out,
+      onDone: opt && opt.onDone,
+    });
+  }
+  function after(sec, fn) { tweens.push({ delay: sec, fn, t: 0 }); }
+  function tickTweens(dt) {
+    const keep = [];
+    for (const tw of tweens) {
+      if (tw.custom) {
+        if (tw.tick(dt)) keep.push(tw);
+        continue;
+      }
+      tw.t += dt;
+      if (tw.delay != null) {
+        if (tw.t >= tw.delay) tw.fn();
+        else keep.push(tw);
+        continue;
+      }
+      const u = Math.min(1, tw.t / tw.dur);
+      const e = tw.ease(u);
+      for (const k of Object.keys(tw.to)) tw.obj[k] = tw.from[k] + (tw.to[k] - tw.from[k]) * e;
+      if (u < 1) keep.push(tw);
+      else if (tw.onDone) tw.onDone();
+    }
+    tweens = keep;
+  }
+
+  /* -------- sort rules -------- */
+  function clone(wells) { return wells.map((w) => w.slice()); }
+  function pourCount(wells, a, b) {
+    const A = wells[a], B = wells[b];
+    if (a === b || !A.length || B.length >= CAP) return 0;
+    const col = A[A.length - 1];
+    if (B.length && B[B.length - 1] !== col) return 0;
+    let n = 0;
+    for (let i = A.length - 1; i >= 0 && A[i] === col && B.length + n < CAP; i--) n++;
+    return n;
+  }
+  function applyPour(wells, a, b) {
+    const n = pourCount(wells, a, b);
+    for (let i = 0; i < n; i++) wells[b].push(wells[a].pop());
+    return n;
+  }
+  function solved(wells) {
+    const seen = new Set();
+    for (const w of wells) {
+      if (!w.length) continue;
+      if (w.length !== CAP) return false;
+      if (w.some((c) => c !== w[0])) return false;
+      if (seen.has(w[0])) return false;
+      seen.add(w[0]);
+    }
+    return true;
+  }
+  function shortestMove(wells) {
+    const key = (s) => s.map((w) => w.join("")).join("|");
+    const start = clone(wells);
+    if (solved(start)) return null;
+    const q = [[start, []]];
+    const seen = new Set([key(start)]);
+    while (q.length) {
+      const [cur, path] = q.shift();
+      for (let a = 0; a < cur.length; a++) {
+        for (let b = 0; b < cur.length; b++) {
+          if (!pourCount(cur, a, b)) continue;
+          const nxt = clone(cur);
+          applyPour(nxt, a, b);
+          const k = key(nxt);
+          if (seen.has(k)) continue;
+          const p2 = path.concat([[a, b]]);
+          if (solved(nxt)) return p2[0];
+          seen.add(k);
+          if (p2.length < 18) q.push([nxt, p2]);
+        }
+      }
+    }
+    return null;
+  }
+  function scramble(nColors, nWells, moves, seed) {
+    let s = seed;
+    const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+    const wells = [];
+    for (let c = 0; c < nColors; c++) wells.push(new Array(CAP).fill(c));
+    while (wells.length < nWells) wells.push([]);
+    let guard = 0;
+    for (let m = 0; m < moves && guard < 400; ) {
+      guard++;
+      const a = (rnd() * nWells) | 0;
+      const b = (rnd() * nWells) | 0;
+      if (!pourCount(wells, a, b)) continue;
+      applyPour(wells, a, b);
+      m++;
+    }
+    if (solved(wells)) return scramble(nColors, nWells, moves + 3, seed + 1);
+    return wells;
+  }
+
+  const LEVELS = [
+    { wells: [[0, 0, 1, 1], [1, 1, 0, 0], [], []], title: "First pour" },
+    // Hand-authored: 6 legal pours from a solved position; verified by the in-game solver.
+    { wells: [[0, 0, 0, 1], [1, 1, 1, 0], [2, 2, 2, 3], [3, 3, 3, 2], [], []], title: "Deep well" },
+  ];
+
+  /* -------- game state -------- */
+  const G = {
+    phase: "wait", // wait | play | end
+    endKind: "win",
+    level: 0,
+    wells: clone(LEVELS[0].wells),
+    lift: -1,
+    flights: [],
+    clock: 0,
+    idle: 0,
+    touched: false,
+    banner: { text: "", a: 0 },
+    flash: 0,
+    shake: 0,
+    confetti: [],
+    trans: 0,
+    handT: 0,
+  };
+
+  function resetAll() {
+    tweens = [];
+    G.phase = "wait";
+    G.endKind = "win";
+    G.level = 0;
+    G.wells = clone(LEVELS[0].wells);
+    G.lift = -1;
+    G.flights = [];
+    G.clock = 0;
+    G.idle = 0;
+    G.touched = false;
+    G.banner = { text: "", a: 0 };
+    G.flash = 0;
+    G.shake = 0;
+    G.confetti = [];
+    G.trans = 0;
+    G.handT = 0;
+    showBanner("POUR EACH WELL", 1.6);
+  }
+
+  function showBanner(text, hold) {
+    G.banner.text = text;
+    G.banner.a = 0;
+    tween(G.banner, { a: 1 }, 0.25, {
+      onDone: () => after(hold || 1.1, () => tween(G.banner, { a: 0 }, 0.35)),
+    });
+  }
+
+  function layoutWells() {
+    const n = G.wells.length;
+    const gap = n <= 4 ? 150 : 112;
+    const total = gap * (n - 1);
+    const x0 = W / 2 - total / 2;
+    const y = 820;
+    return G.wells.map((_, i) => ({ x: x0 + i * gap, y, w: 88, h: 280 }));
+  }
+
+  function wellTop(layout, i, count) {
+    const L = layout[i];
+    const orb = 56;
+    const base = L.y + L.h / 2 - 24;
+    const filled = count;
+    return { x: L.x, y: base - filled * orb };
+  }
+
+  function hitWell(x, y) {
+    const L = layoutWells();
+    for (let i = 0; i < L.length; i++) {
+      const r = L[i];
+      if (Math.abs(x - r.x) < r.w * 0.7 && y > r.y - r.h / 2 - 40 && y < r.y + r.h / 2 + 20) return i;
+    }
+    return -1;
+  }
+
+  function armPlay() {
+    if (G.touched) return;
+    G.touched = true;
+    G.phase = "play";
+    G.idle = 0;
+    SFX.boot();
+  }
+
+  function trySelect(i) {
+    if (G.phase === "end" || G.trans > 0 || G.flights.length) return;
+    if (G.lift < 0) {
+      if (!G.wells[i].length) { SFX.deny(); return; }
+      G.lift = i;
+      SFX.pour();
+      return;
+    }
+    if (G.lift === i) { G.lift = -1; return; }
+    const n = pourCount(G.wells, G.lift, i);
+    if (!n) { SFX.deny(); G.lift = -1; return; }
+    launchPour(G.lift, i, n);
+    G.lift = -1;
+  }
+
+  function launchPour(a, b, n) {
+    const L = layoutWells();
+    for (let k = 0; k < n; k++) {
+      const col = G.wells[a][G.wells[a].length - 1];
+      G.wells[a].pop();
+      const from = wellTop(L, a, G.wells[a].length);
+      const destCount = G.wells[b].length + k;
+      const to = wellTop(L, b, destCount);
+      const flight = {
+        col, x: from.x, y: from.y, a: 1,
+        delay: k * 0.07,
+        started: false, done: false,
+        dest: b,
+      };
+      G.flights.push(flight);
+      after(k * 0.07, () => {
+        flight.started = true;
+        SFX.pour();
+        const midY = Math.min(from.y, to.y) - 140;
+        // two-step arc via custom tween on x/y
+        const hop = { t: 0 };
+        const dur = 0.32;
+        const anim = { delay: 0, t: 0, dur, custom: true, tick(dt) {
+          anim.t += dt;
+          const u = Math.min(1, anim.t / dur);
+          const e = ease.inOut(u);
+          flight.x = from.x + (to.x - from.x) * e;
+          flight.y = from.y + (to.y - from.y) * e - Math.sin(u * Math.PI) * (from.y - midY > 20 ? 120 : 80);
+          if (u >= 1) {
+            flight.done = true;
+            G.wells[b].push(col);
+            SFX.pop();
+            if (G.wells[b].length === CAP && G.wells[b].every((c) => c === G.wells[b][0])) {
+              burst(to.x, to.y - 40, PALETTE[col].fill);
+              G.flash = 0.35;
+            }
+          }
+          return u < 1;
+        }};
+        tweens.push(anim);
+      });
+    }
+    after(0.07 * n + 0.36, onPourSettled);
+  }
+
+  function onPourSettled() {
+    G.flights = G.flights.filter((f) => !f.done);
+    if (!solved(G.wells)) return;
+    if (G.level === 0) enterLevel2();
+    else finish("win");
+  }
+
+  function enterLevel2() {
+    G.trans = 1;
+    G.flash = 0.8;
+    G.shake = 10;
+    showBanner("DEEP WELL", 1.2);
+    SFX.pop();
+    after(0.55, () => {
+      G.level = 1;
+      G.wells = clone(LEVELS[1].wells);
+      G.lift = -1;
+      G.flights = [];
+      G.trans = 0;
+    });
+  }
+
+  function finish(kind) {
+    if (G.phase === "end") return;
+    G.phase = "end";
+    G.endKind = kind;
+    G.lift = -1;
+    if (kind === "win") {
+      SFX.win();
+      for (let i = 0; i < 48; i++) {
+        G.confetti.push({
+          x: W / 2, y: 420,
+          vx: (Math.random() - 0.5) * 520,
+          vy: -200 - Math.random() * 420,
+          rot: Math.random() * 6,
+          vr: (Math.random() - 0.5) * 8,
+          c: PALETTE[i % PALETTE.length].fill,
+          s: 8 + Math.random() * 10,
+        });
+      }
+    } else SFX.almost();
+  }
+
+  function burst(x, y, color) {
+    for (let i = 0; i < 16; i++) {
+      G.confetti.push({
+        x, y,
+        vx: Math.cos((i / 16) * 6.28) * 180,
+        vy: Math.sin((i / 16) * 6.28) * 180,
+        rot: 0, vr: 4, c: color, s: 6, life: 0.6,
+      });
+    }
+  }
+
+  /* -------- input -------- */
+  const hitMute = () => ({ x: 656, y: 56, r: 36 });
+  const hitCtaPill = () => ({ x: 360, y: 1218, w: 280, h: 56 });
+  const hitInstall = () => ({ x: 360, y: 760, w: 420, h: 96 });
+  const hitReplay = () => ({ x: 360, y: 880, w: 280, h: 64 });
+
+  function inCircle(x, y, c) { return (x - c.x) ** 2 + (y - c.y) ** 2 <= c.r * c.r; }
+  function inBox(x, y, b) { return Math.abs(x - b.x) <= b.w / 2 && Math.abs(y - b.y) <= b.h / 2; }
+
+  function onPtr(cx, cy) {
+    const p = clientToLogical(cx, cy);
+    if (inCircle(p.x, p.y, hitMute())) { SFX.toggle(); return; }
+    if (G.phase === "end") {
+      if (inBox(p.x, p.y, hitReplay())) { resetAll(); return; }
+      if (inBox(p.x, p.y, hitInstall()) || p.y > 400) installCTA();
+      return;
+    }
+    if (inBox(p.x, p.y, hitCtaPill())) { installCTA(); return; }
+    armPlay();
+    const i = hitWell(p.x, p.y);
+    if (i >= 0) trySelect(i);
+    G.idle = 0;
+  }
+
+  canvas.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    onPtr(e.clientX, e.clientY);
+  });
+
+  /* -------- draw -------- */
+  function roundRect(x, y, w, h, r) {
+    const rr = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+  }
+
+  function drawBackdrop() {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#17192a");
+    g.addColorStop(0.55, "#10121c");
+    g.addColorStop(1, "#0b0c13");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(123,140,255,0.05)";
+    ctx.beginPath();
+    ctx.ellipse(560, 180, 260, 180, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(61,222,176,0.04)";
+    ctx.beginPath();
+    ctx.ellipse(120, 980, 280, 200, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawKeeper() {
+    const x = 360, y = 268;
+    ctx.save();
+    ctx.translate(x, y);
+    // body
+    ctx.fillStyle = "#e8dff6";
+    ctx.beginPath(); ctx.ellipse(0, 16, 42, 48, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#c9b8e8";
+    ctx.beginPath(); ctx.ellipse(0, 28, 28, 22, 0, 0, Math.PI * 2); ctx.fill();
+    // ears
+    ctx.fillStyle = "#e8dff6";
+    ctx.beginPath(); ctx.moveTo(-28, -20); ctx.lineTo(-8, -48); ctx.lineTo(0, -16); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(28, -20); ctx.lineTo(8, -48); ctx.lineTo(0, -16); ctx.fill();
+    // eyes
+    ctx.fillStyle = "#1b1e2c";
+    ctx.beginPath(); ctx.arc(-14, 0, 6, 0, Math.PI * 2); ctx.arc(14, 0, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(-12, -2, 2.2, 0, Math.PI * 2); ctx.arc(16, -2, 2.2, 0, Math.PI * 2); ctx.fill();
+    // blush + nose
+    ctx.fillStyle = "rgba(255,107,107,0.35)";
+    ctx.beginPath(); ctx.ellipse(-24, 10, 6, 4, 0, 0, Math.PI * 2); ctx.ellipse(24, 10, 6, 4, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#5a4a68";
+    ctx.beginPath(); ctx.arc(0, 8, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawOrb(x, y, col, scaleOrb) {
+    const p = PALETTE[col];
+    const r = 26 * (scaleOrb || 1);
+    const grd = ctx.createRadialGradient(x - 8, y - 8, 4, x, y, r);
+    grd.addColorStop(0, "#fff6");
+    grd.addColorStop(0.25, p.fill);
+    grd.addColorStop(1, p.deep);
+    ctx.fillStyle = grd;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.45)";
+    ctx.beginPath(); ctx.ellipse(x - 7, y - 8, 6, 4, -0.5, 0, Math.PI * 2); ctx.fill();
+  }
+
+  function drawWells() {
+    const L = layoutWells();
+    L.forEach((r, i) => {
+      const lifted = G.lift === i ? 18 : 0;
+      const y = r.y - lifted;
+      // glass
+      ctx.save();
+      ctx.translate(r.x, y);
+      const grd = ctx.createLinearGradient(-44, 0, 44, 0);
+      grd.addColorStop(0, "rgba(190,210,240,0.16)");
+      grd.addColorStop(0.4, "rgba(255,255,255,0.05)");
+      grd.addColorStop(1, "rgba(160,190,230,0.18)");
+      ctx.fillStyle = grd;
+      ctx.strokeStyle = G.lift === i ? "rgba(244,196,48,0.9)" : "rgba(210,230,255,0.35)";
+      ctx.lineWidth = G.lift === i ? 4 : 2;
+      roundRect(-44, -r.h / 2, 88, r.h, 28);
+      ctx.fill(); ctx.stroke();
+      // inner rim
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 2;
+      roundRect(-36, -r.h / 2 + 10, 72, r.h - 28, 22);
+      ctx.stroke();
+      ctx.restore();
+      // orbs bottom to top
+      const well = G.wells[i];
+      well.forEach((col, k) => {
+        const pos = wellTop(L.map((q, qi) => (qi === i ? { ...q, y } : q)), i, k);
+        drawOrb(pos.x, pos.y, col, 1);
+      });
+    });
+    for (const f of G.flights) {
+      if (f.started && !f.done) drawOrb(f.x, f.y, f.col, 1.05);
+    }
+  }
+
+  function drawHud() {
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f3f0ea";
+    ctx.font = "700 40px system-ui, sans-serif";
+    ctx.fillText("CHROMA WELLS", 360, 118);
+    ctx.font = "500 20px system-ui, sans-serif";
+    ctx.fillStyle = "rgba(243,240,234,0.6)";
+    ctx.fillText(G.level === 0 ? "Match every well to one color" : "Four hues · six wells", 360, 150);
+
+    const left = Math.max(0, ROUND_CAP - G.clock);
+    const ratio = G.touched ? left / ROUND_CAP : 1;
+    roundRect(160, 178, 400, 16, 8);
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fill();
+    const bar = ctx.createLinearGradient(160, 0, 560, 0);
+    bar.addColorStop(0, "#3ddeb0");
+    bar.addColorStop(1, "#7b8cff");
+    ctx.fillStyle = bar;
+    roundRect(160, 178, 400 * ratio, 16, 8);
+    ctx.fill();
+    ctx.fillStyle = "rgba(243,240,234,0.7)";
+    ctx.font = "600 16px system-ui, sans-serif";
+    ctx.fillText(G.touched ? Math.ceil(left) + "s" : "Tap a well", 360, 212);
+
+    // mute
+    const m = hitMute();
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.beginPath(); ctx.arc(m.x, m.y, 28, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = "#f3f0ea";
+    ctx.font = "20px system-ui";
+    ctx.fillText(SFX.muted() ? "×" : "♪", m.x, m.y + 7);
+
+    // cta pill
+    const c = hitCtaPill();
+    ctx.fillStyle = "#f4c430";
+    roundRect(c.x - c.w / 2, c.y - c.h / 2, c.w, c.h, 28);
+    ctx.fill();
+    ctx.fillStyle = "#2a1c04";
+    ctx.font = "700 22px system-ui, sans-serif";
+    ctx.fillText("Install", c.x, c.y + 8);
+  }
+
+  function drawBanner() {
+    if (G.banner.a <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = G.banner.a;
+    ctx.fillStyle = "rgba(12,14,22,0.72)";
+    roundRect(120, 500, 480, 88, 20);
+    ctx.fill();
+    ctx.fillStyle = "#f4c430";
+    ctx.textAlign = "center";
+    ctx.font = "800 36px system-ui, sans-serif";
+    ctx.fillText(G.banner.text, 360, 556);
+    ctx.restore();
+  }
+
+  function drawHand() {
+    if (G.phase === "end" || G.flights.length || G.trans) return;
+    const need = !G.touched || G.idle >= HINT_AFTER;
+    if (!need) return;
+    const mv = shortestMove(G.wells);
+    if (!mv) return;
+    const L = layoutWells();
+    const from = mv[0], to = (G.lift === from) ? mv[1] : from;
+    const target = L[G.lift === from ? to : from];
+    const bounce = Math.sin(G.handT * 6) * 10;
+    const press = (Math.sin(G.handT * 6) + 1) / 2;
+    const x = target.x + 36, y = target.y - 20 + bounce;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(-0.5);
+    const s = 1 - press * 0.08;
+    ctx.scale(s, s);
+    ctx.fillStyle = "rgba(0,0,0,0.2)";
+    ctx.beginPath(); ctx.ellipse(8, 16, 26, 12, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#f3d7b8";
+    ctx.strokeStyle = "rgba(60,30,20,0.45)";
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.ellipse(0, -30, 15, 30, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(10, 8, 22, 18, 0.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#355c7d";
+    ctx.beginPath(); roundRect(-4, 14, 32, 28, 8); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawEnd() {
+    ctx.fillStyle = "rgba(8,10,16,0.72)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = "center";
+    ctx.fillStyle = G.endKind === "win" ? "#f4c430" : "#ff9b7a";
+    ctx.font = "800 72px system-ui, sans-serif";
+    ctx.fillText(G.endKind === "win" ? "CLEARED" : "ALMOST", 360, 430);
+    ctx.fillStyle = "rgba(243,240,234,0.8)";
+    ctx.font = "500 26px system-ui, sans-serif";
+    ctx.fillText(
+      G.endKind === "win" ? "Every well holds a single hue." : "One more pour would have done it.",
+      360, 490
+    );
+    // mark
+    ctx.save();
+    ctx.translate(360, 600);
+    for (let i = 0; i < 4; i++) {
+      ctx.fillStyle = PALETTE[i].fill;
+      ctx.beginPath(); ctx.arc((i - 1.5) * 36, 0, 14, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+    const inst = hitInstall();
+    ctx.fillStyle = "#f4c430";
+    roundRect(inst.x - inst.w / 2, inst.y - inst.h / 2, inst.w, inst.h, 48);
+    ctx.fill();
+    ctx.fillStyle = "#2a1c04";
+    ctx.font = "800 36px system-ui, sans-serif";
+    ctx.fillText("Install", inst.x, inst.y + 13);
+    ctx.fillStyle = "rgba(243,240,234,0.75)";
+    ctx.font = "600 22px system-ui, sans-serif";
+    ctx.fillText("Replay", 360, 890);
+  }
+
+  function drawConfetti(dt) {
+    for (const p of G.confetti) {
+      p.vy += 900 * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.rot += p.vr * dt;
+      p.vx *= 0.99;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = p.c;
+      ctx.fillRect(-p.s / 2, -p.s / 2, p.s, p.s * 0.6);
+      ctx.restore();
+    }
+    G.confetti = G.confetti.filter((p) => p.y < H + 40);
+  }
+
+  /* -------- loop -------- */
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    tickTweens(dt);
+    G.handT += dt;
+    if (G.shake > 0) G.shake = Math.max(0, G.shake - dt * 30);
+    if (G.flash > 0) G.flash = Math.max(0, G.flash - dt);
+
+    if (G.phase !== "end") {
+      G.idle += dt;
+      if (G.touched && G.phase === "play" && !G.trans) {
+        G.clock += dt;
+        if (G.clock >= ROUND_CAP && !G.flights.length) finish("almost");
+      }
+      if (G.idle >= IDLE_TIMEOUT && G.phase !== "end" && !G.flights.length && !G.trans) finish("almost");
+    }
+    if (G.phase === "end") drawConfetti(dt);
+
+    const dpr = canvas.width / W;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.save();
+    if (G.shake) ctx.translate((Math.random() - 0.5) * G.shake, (Math.random() - 0.5) * G.shake);
+    drawBackdrop();
+    drawKeeper();
+    drawWells();
+    drawHud();
+    drawBanner();
+    drawHand();
+    if (G.phase === "end") {
+      drawConfetti(0);
+      drawEnd();
+    }
+    if (G.flash > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${G.flash * 0.45})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+    ctx.restore();
+    requestAnimationFrame(frame);
+  }
+
+  resetAll();
+  requestAnimationFrame(frame);
+
+  window.__QA = {
+    name: "chroma-wells",
+    phase: () => G.phase,
+    endKind: () => G.endKind,
+    level: () => G.level,
+    logicalToClient,
+    hint() {
+      const mv = shortestMove(G.wells);
+      if (!mv) return null;
+      const L = layoutWells();
+      const a = G.lift === mv[0] ? mv[1] : mv[0];
+      return { from: mv[0], to: mv[1], lift: G.lift, point: logicalToClient(L[a].x, L[a].y) };
+    },
+    install: () => logicalToClient(hitInstall().x, hitInstall().y),
+    replay: () => logicalToClient(hitReplay().x, hitReplay().y),
+    pill: () => logicalToClient(hitCtaPill().x, hitCtaPill().y),
+  };
+})();
+</script>
+</body>
+</html>

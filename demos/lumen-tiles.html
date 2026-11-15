@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>Lumen Tiles</title>
+  <style>
+    html, body {
+      margin: 0; height: 100%; overflow: hidden; background: #10101c;
+      touch-action: none; user-select: none; -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    canvas { display: block; position: absolute; touch-action: none; }
+  </style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script>
+(() => {
+  "use strict";
+
+  const W = 720, H = 1280;
+  const STORE_URL = 'https://lyp1314.github.io/playable-ads-portfolio/';
+  const ROUND_CAP = 42;
+  const HINT_AFTER = 2.5;
+  const IDLE_TIMEOUT = 10;
+  const COLS = 6, ROWS = 7, CELL = 92, MOVES = 12;
+  const BX = (W - COLS * CELL) / 2, BY = 300;
+  const KINDS = [
+    { fill: "#f4c430", deep: "#c49212", icon: "sun" },
+    { fill: "#8ad4ff", deep: "#3d7ec4", icon: "moon" },
+    { fill: "#5ee0a0", deep: "#1e9a68", icon: "leaf" },
+    { fill: "#7b8cff", deep: "#3d4ec4", icon: "drop" },
+    { fill: "#ff8a5b", deep: "#c45c30", icon: "ember" },
+  ];
+
+  function installCTA() {
+    try {
+      if (window.FbPlayableAd && typeof window.FbPlayableAd.onCTAClick === "function") {
+        window.FbPlayableAd.onCTAClick(); return "meta";
+      }
+      if (window.ExitApi && typeof window.ExitApi.exit === "function") {
+        window.ExitApi.exit(); return "google";
+      }
+      if (window.mraid && typeof window.mraid.open === "function") {
+        const open = () => window.mraid.open(absoluteStore());
+        if (typeof window.mraid.getState === "function" && window.mraid.getState() === "loading") {
+          window.mraid.addEventListener("ready", open);
+        } else open();
+        return "mraid";
+      }
+    } catch (err) {}
+    window.open(absoluteStore(), "_blank");
+    return "fallback";
+  }
+  function absoluteStore() {
+    try { return new URL(STORE_URL, window.location.href).href; }
+    catch (e) { return STORE_URL; }
+  }
+
+  const SFX = (() => {
+    let ctx = null, gain = null, muted = false, armed = false;
+    function boot() {
+      if (!ctx) {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        gain = ctx.createGain(); gain.gain.value = muted ? 0 : 0.9; gain.connect(ctx.destination);
+      }
+      if (ctx.state === "suspended") ctx.resume();
+      armed = true;
+    }
+    function tone(freq, dur, type, vol, slide) {
+      if (muted || !armed) return;
+      boot();
+      const t = ctx.currentTime, o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = type || "sine";
+      o.frequency.setValueAtTime(freq, t);
+      if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + dur);
+      g.gain.setValueAtTime(vol || 0.08, t);
+      g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+      o.connect(g); g.connect(gain); o.start(t); o.stop(t + dur + 0.02);
+    }
+    return {
+      boot,
+      swap() { tone(480, 0.08, "sine", 0.05); },
+      deny() { tone(180, 0.14, "square", 0.04); },
+      match(n) { tone(520 + n * 40, 0.16, "triangle", 0.07); },
+      burst() { tone(300, 0.2, "sine", 0.08, 900); setTimeout(() => tone(880, 0.2, "sine", 0.06), 90); },
+      win() { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.28, "sine", 0.07), i * 90)); },
+      almost() { tone(392, 0.22, "sine", 0.07, 200); },
+      toggle() { muted = !muted; if (gain) gain.gain.value = muted ? 0 : 0.9; return muted; },
+      muted: () => muted,
+    };
+  })();
+
+  const canvas = document.getElementById("stage");
+  const ctx = canvas.getContext("2d");
+  function fit() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    const cssW = W * scale, cssH = H * scale;
+    canvas.style.width = cssW + "px"; canvas.style.height = cssH + "px";
+    canvas.style.left = (window.innerWidth - cssW) / 2 + "px";
+    canvas.style.top = (window.innerHeight - cssH) / 2 + "px";
+    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener("resize", fit); fit();
+  function clientToLogical(cx, cy) {
+    const r = canvas.getBoundingClientRect();
+    return { x: ((cx - r.left) / r.width) * W, y: ((cy - r.top) / r.height) * H };
+  }
+  function logicalToClient(lx, ly) {
+    const r = canvas.getBoundingClientRect();
+    return { x: r.left + (lx / W) * r.width, y: r.top + (ly / H) * r.height };
+  }
+  function cellCenter(c, r) { return { x: BX + c * CELL + CELL / 2, y: BY + r * CELL + CELL / 2 }; }
+
+  const ease = {
+    out: (t) => 1 - (1 - t) * (1 - t),
+    inOut: (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2),
+  };
+  let tweens = [];
+  function tween(obj, to, dur, opt) {
+    const from = {}; Object.keys(to).forEach((k) => (from[k] = obj[k]));
+    tweens.push({ obj, from, to, dur, t: 0, ease: (opt && opt.ease) || ease.out, onDone: opt && opt.onDone });
+  }
+  function after(sec, fn) { tweens.push({ delay: sec, fn, t: 0 }); }
+  function tickTweens(dt) {
+    const keep = [];
+    const scale = G && G.slow > 0 ? 0.45 : 1;
+    for (const tw of tweens) {
+      tw.t += dt * (tw.real ? 1 : scale);
+      if (tw.delay != null) { if (tw.t >= tw.delay) tw.fn(); else keep.push(tw); continue; }
+      const u = Math.min(1, tw.t / tw.dur);
+      const e = tw.ease(u);
+      for (const k of Object.keys(tw.to)) tw.obj[k] = tw.from[k] + (tw.to[k] - tw.from[k]) * e;
+      if (u < 1) keep.push(tw); else if (tw.onDone) tw.onDone();
+    }
+    tweens = keep;
+  }
+
+  const OPEN = [
+    [1, 2, 0, 1, 2, 0],
+    [2, 0, 1, 2, 0, 1],
+    [1, 0, 0, 2, 0, 1],
+    [0, 1, 2, 0, 1, 2],
+    [2, 0, 1, 2, 0, 1],
+    [1, 3, 0, 4, 2, 0],
+    [3, 1, 4, 0, 3, 2],
+  ];
+  const SEALS = new Set(["2,1", "2,2", "2,4", "4,1"]);
+
+  let seed = 77;
+  function rnd() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
+
+  function makeTile(type, c, r, seal) {
+    const p = cellCenter(c, r);
+    return { type, c, r, x: p.x, y: p.y, scale: 1, seal: !!seal, ev: 0 };
+  }
+
+  const G = {
+    phase: "wait", endKind: "win",
+    grid: [], moves: MOVES, seals: SEALS.size,
+    selected: null, busy: false, highlighted: false,
+    clock: 0, idle: 0, touched: false, slow: 0,
+    banner: { text: "", a: 0 }, flash: 0, shake: 0,
+    confetti: [], fx: [], handT: 0,
+  };
+
+  function buildGrid() {
+    seed = 77;
+    G.grid = [];
+    for (let r = 0; r < ROWS; r++) {
+      const row = [];
+      for (let c = 0; c < COLS; c++) {
+        row.push(makeTile(OPEN[r][c], c, r, SEALS.has(r + "," + c)));
+      }
+      G.grid.push(row);
+    }
+  }
+
+  function showBanner(text, hold) {
+    G.banner.text = text; G.banner.a = 0;
+    tween(G.banner, { a: 1 }, 0.22, {
+      onDone: () => after(hold || 1.0, () => tween(G.banner, { a: 0 }, 0.3)),
+    });
+  }
+
+  function resetAll() {
+    tweens = [];
+    G.phase = "wait"; G.endKind = "win";
+    G.moves = MOVES; G.seals = SEALS.size;
+    G.selected = null; G.busy = false; G.highlighted = false;
+    G.clock = 0; G.idle = 0; G.touched = false; G.slow = 0;
+    G.banner = { text: "", a: 0 }; G.flash = 0; G.shake = 0;
+    G.confetti = []; G.fx = []; G.handT = 0;
+    buildGrid();
+    showBanner("MATCH THE SIGILS", 1.5);
+  }
+
+  function at(c, r) { return (c >= 0 && c < COLS && r >= 0 && r < ROWS) ? G.grid[r][c] : null; }
+
+  function findMatches() {
+    const marks = new Set();
+    const runs = [];
+    for (let r = 0; r < ROWS; r++) {
+      let k = 1;
+      for (let c = 1; c <= COLS; c++) {
+        const same = c < COLS && at(c, r) && at(c - 1, r) && at(c, r).type === at(c - 1, r).type;
+        if (same) k++;
+        else {
+          if (k >= 3) {
+            const cells = [];
+            for (let i = 0; i < k; i++) { marks.add((c - 1 - i) + "," + r); cells.push([c - 1 - i, r]); }
+            runs.push({ dir: "h", len: k, cells });
+          }
+          k = 1;
+        }
+      }
+    }
+    for (let c = 0; c < COLS; c++) {
+      let k = 1;
+      for (let r = 1; r <= ROWS; r++) {
+        const same = r < ROWS && at(c, r) && at(c, r - 1) && at(c, r).type === at(c, r - 1).type;
+        if (same) k++;
+        else {
+          if (k >= 3) {
+            const cells = [];
+            for (let i = 0; i < k; i++) { marks.add(c + "," + (r - 1 - i)); cells.push([c, r - 1 - i]); }
+            runs.push({ dir: "v", len: k, cells });
+          }
+          k = 1;
+        }
+      }
+    }
+    return { marks, runs };
+  }
+
+  function validSwap(a, b) {
+    if (!a || !b) return false;
+    if (Math.abs(a.c - b.c) + Math.abs(a.r - b.r) !== 1) return false;
+    swapTiles(a, b);
+    const m = findMatches();
+    swapTiles(a, b);
+    return m.marks.size >= 3;
+  }
+
+  function swapTiles(a, b) {
+    const { c: ac, r: ar } = a, { c: bc, r: br } = b;
+    G.grid[ar][ac] = b; G.grid[br][bc] = a;
+    a.c = bc; a.r = br; b.c = ac; b.r = ar;
+  }
+
+  function hintSwap() {
+    let best = null, bestScore = -1;
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const t = at(c, r);
+        for (const [dc, dr] of [[1, 0], [0, 1]]) {
+          const u = at(c + dc, r + dr);
+          if (!t || !u) continue;
+          if (Math.abs(t.c - u.c) + Math.abs(t.r - u.r) !== 1) continue;
+          swapTiles(t, u);
+          const m = findMatches();
+          swapTiles(t, u);
+          if (m.marks.size < 3) continue;
+          let score = m.marks.size;
+          for (const run of m.runs) if (run.len >= 4) score += 10;
+          m.marks.forEach((k) => {
+            const [cc, rr] = k.split(",").map(Number);
+            const tile = at(cc, rr);
+            if (tile && tile.seal) score += 8;
+          });
+          if (score > bestScore) { bestScore = score; best = { a: t, b: u }; }
+        }
+      }
+    }
+    return best;
+  }
+
+  function armPlay() {
+    if (G.touched) return;
+    G.touched = true; G.phase = "play"; G.idle = 0; SFX.boot();
+  }
+
+  function tapCell(c, r) {
+    if (G.busy || G.phase === "end") return;
+    const t = at(c, r);
+    if (!t) return;
+    if (!G.selected) { G.selected = t; SFX.swap(); return; }
+    if (G.selected === t) { G.selected = null; return; }
+    const a = G.selected, b = t;
+    G.selected = null;
+    if (Math.abs(a.c - b.c) + Math.abs(a.r - b.r) !== 1) { G.selected = b; SFX.swap(); return; }
+    if (!validSwap(a, b)) {
+      SFX.deny();
+      const pa = cellCenter(a.c, a.r), pb = cellCenter(b.c, b.r);
+      tween(a, { x: pb.x, y: pb.y }, 0.1, { onDone: () => tween(a, { x: pa.x, y: pa.y }, 0.12) });
+      tween(b, { x: pa.x, y: pa.y }, 0.1, { onDone: () => tween(b, { x: pb.x, y: pb.y }, 0.12) });
+      return;
+    }
+    playSwap(a, b);
+  }
+
+  function playSwap(a, b) {
+    G.busy = true;
+    G.moves = Math.max(0, G.moves - 1);
+    const pa = cellCenter(a.c, a.r), pb = cellCenter(b.c, b.r);
+    // a and b still have original coords; swap after motion
+    SFX.swap();
+    tween(a, { x: pb.x, y: pb.y }, 0.18, { ease: ease.inOut });
+    tween(b, { x: pa.x, y: pa.y }, 0.18, {
+      ease: ease.inOut,
+      onDone: () => { swapTiles(a, b); resolve(true); },
+    });
+  }
+
+  function resolve(fromMove) {
+    const { marks, runs } = findMatches();
+    if (!marks.size) {
+      G.busy = false;
+      if (G.seals <= 0) finish("win");
+      else if (G.moves <= 0) finish("almost");
+      return;
+    }
+    let big = runs.some((r) => r.len >= 4);
+    if (big && !G.highlighted) {
+      G.highlighted = true;
+      G.slow = 0.9;
+      G.flash = 0.7;
+      G.shake = 10;
+      showBanner("AURORA", 0.9);
+      SFX.burst();
+      after(0.9, () => { G.slow = 0; });
+    } else SFX.match(marks.size);
+
+    // 5-in-a-row clears that color, 4-row clears the row/col
+    const extra = new Set();
+    for (const run of runs) {
+      if (run.len >= 5) {
+        const typ = at(run.cells[0][0], run.cells[0][1]).type;
+        for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+          if (at(c, r) && at(c, r).type === typ) extra.add(c + "," + r);
+        }
+      } else if (run.len >= 4) {
+        if (run.dir === "h") {
+          const r = run.cells[0][1];
+          for (let c = 0; c < COLS; c++) extra.add(c + "," + r);
+        } else {
+          const c = run.cells[0][0];
+          for (let r = 0; r < ROWS; r++) extra.add(c + "," + r);
+        }
+      }
+    }
+    extra.forEach((k) => marks.add(k));
+
+    const gone = [];
+    marks.forEach((k) => {
+      const [c, r] = k.split(",").map(Number);
+      const t = at(c, r);
+      if (!t) return;
+      if (t.seal) {
+        t.seal = false;
+        G.seals = Math.max(0, G.seals - 1);
+      }
+      gone.push(t);
+      G.grid[r][c] = null;
+      const p = cellCenter(c, r);
+      G.fx.push({ x: p.x, y: p.y, a: 1, s: 20, c: KINDS[t.type].fill });
+    });
+    for (const t of gone) tween(t, { scale: 0 }, 0.16);
+
+    after(0.18, () => { gravityAndFill(); after(0.28, () => resolve(false)); });
+  }
+
+  function gravityAndFill() {
+    for (let c = 0; c < COLS; c++) {
+      const stack = [];
+      for (let r = ROWS - 1; r >= 0; r--) {
+        if (at(c, r)) stack.push(G.grid[r][c]);
+        G.grid[r][c] = null;
+      }
+      let r = ROWS - 1;
+      for (const t of stack) {
+        G.grid[r][c] = t; t.c = c; t.r = r;
+        const p = cellCenter(c, r);
+        tween(t, { x: p.x, y: p.y }, 0.22, { ease: ease.out });
+        r--;
+      }
+      while (r >= 0) {
+        const typ = (rnd() * KINDS.length) | 0;
+        const t = makeTile(typ, c, r, false);
+        t.y = cellCenter(c, -1 - (r)).y; // spawn above
+        t.y = BY - CELL * (r + 1);
+        G.grid[r][c] = t;
+        const p = cellCenter(c, r);
+        tween(t, { x: p.x, y: p.y }, 0.26, { ease: ease.out });
+        r--;
+      }
+    }
+  }
+
+  function finish(kind) {
+    if (G.phase === "end") return;
+    G.phase = "end"; G.endKind = kind; G.busy = false; G.selected = null;
+    if (kind === "win") {
+      SFX.win();
+      for (let i = 0; i < 48; i++) {
+        G.confetti.push({
+          x: W / 2, y: 400, vx: (Math.random() - 0.5) * 520, vy: -200 - Math.random() * 400,
+          rot: Math.random() * 5, vr: (Math.random() - 0.5) * 8,
+          c: KINDS[i % KINDS.length].fill, s: 8 + Math.random() * 10,
+        });
+      }
+    } else SFX.almost();
+  }
+
+  const hitMute = () => ({ x: 656, y: 56, r: 36 });
+  const hitCtaPill = () => ({ x: 360, y: 1218, w: 280, h: 56 });
+  const hitInstall = () => ({ x: 360, y: 760, w: 420, h: 96 });
+  const hitReplay = () => ({ x: 360, y: 880, w: 280, h: 64 });
+  function inCircle(x, y, c) { return (x - c.x) ** 2 + (y - c.y) ** 2 <= c.r * c.r; }
+  function inBox(x, y, b) { return Math.abs(x - b.x) <= b.w / 2 && Math.abs(y - b.y) <= b.h / 2; }
+
+  function hitCell(x, y) {
+    const c = Math.floor((x - BX) / CELL), r = Math.floor((y - BY) / CELL);
+    if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return null;
+    return { c, r };
+  }
+
+  function onPtr(cx, cy) {
+    const p = clientToLogical(cx, cy);
+    if (inCircle(p.x, p.y, hitMute())) { SFX.toggle(); return; }
+    if (G.phase === "end") {
+      if (inBox(p.x, p.y, hitReplay())) { resetAll(); return; }
+      if (inBox(p.x, p.y, hitInstall()) || p.y > 400) installCTA();
+      return;
+    }
+    if (inBox(p.x, p.y, hitCtaPill())) { installCTA(); return; }
+    armPlay();
+    const cell = hitCell(p.x, p.y);
+    if (cell) tapCell(cell.c, cell.r);
+    G.idle = 0;
+  }
+  canvas.addEventListener("pointerdown", (e) => { e.preventDefault(); onPtr(e.clientX, e.clientY); });
+
+  function roundRect(x, y, w, h, r) {
+    const rr = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+  }
+
+  function drawIcon(kind, x, y, s) {
+    ctx.save(); ctx.translate(x, y); ctx.fillStyle = "#fff"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 3;
+    if (kind === "sun") {
+      ctx.beginPath(); ctx.arc(0, 0, 8 * s, 0, Math.PI * 2); ctx.fill();
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        ctx.beginPath(); ctx.moveTo(Math.cos(a) * 12 * s, Math.sin(a) * 12 * s);
+        ctx.lineTo(Math.cos(a) * 16 * s, Math.sin(a) * 16 * s); ctx.stroke();
+      }
+    } else if (kind === "moon") {
+      ctx.beginPath();
+      ctx.arc(-2 * s, 0, 10 * s, 0.45, Math.PI * 1.75);
+      ctx.arc(4 * s, -3 * s, 7 * s, Math.PI * 1.55, Math.PI * 0.55, true);
+      ctx.closePath(); ctx.fill();
+    } else if (kind === "leaf") {
+      ctx.beginPath(); ctx.ellipse(0, 0, 7 * s, 12 * s, -0.5, 0, Math.PI * 2); ctx.fill();
+    } else if (kind === "drop") {
+      ctx.beginPath(); ctx.moveTo(0, -12 * s);
+      ctx.quadraticCurveTo(12 * s, 4 * s, 0, 12 * s);
+      ctx.quadraticCurveTo(-12 * s, 4 * s, 0, -12 * s); ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.moveTo(0, -12 * s); ctx.lineTo(8 * s, 10 * s); ctx.lineTo(-8 * s, 10 * s); ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawTile(t) {
+    if (!t || t.scale <= 0.01) return;
+    ctx.save();
+    ctx.translate(t.x, t.y);
+    ctx.scale(t.scale, t.scale);
+    const k = KINDS[t.type];
+    const sel = G.selected === t;
+    ctx.fillStyle = k.fill;
+    roundRect(-36, -36, 72, 72, 16); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    roundRect(-28, -28, 56, 18, 8); ctx.fill();
+    drawIcon(k.icon, 0, 4, 1);
+    if (t.seal) {
+      ctx.fillStyle = "rgba(90, 30, 50, 0.55)";
+      ctx.beginPath(); ctx.arc(0, 0, 22, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#c45c6a"; ctx.lineWidth = 3; ctx.stroke();
+    }
+    if (sel) {
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 4;
+      roundRect(-38, -38, 76, 76, 18); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawBackdrop() {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#1a1a32"); g.addColorStop(0.5, "#121224"); g.addColorStop(1, "#0c0c16");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(122,140,255,0.06)";
+    ctx.beginPath(); ctx.ellipse(180, 200, 260, 160, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "rgba(244,196,48,0.05)";
+    ctx.beginPath(); ctx.ellipse(560, 980, 240, 180, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.04)";
+    roundRect(BX - 12, BY - 12, COLS * CELL + 24, ROWS * CELL + 24, 20); ctx.fill();
+  }
+
+  function drawHud() {
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f3f0ea";
+    ctx.font = "700 40px system-ui, sans-serif";
+    ctx.fillText("LUMEN TILES", 360, 118);
+    ctx.font = "500 20px system-ui, sans-serif";
+    ctx.fillStyle = "rgba(243,240,234,0.6)";
+    ctx.fillText("Break the four wax seals", 360, 150);
+    ctx.fillStyle = "#f3f0ea";
+    ctx.font = "700 22px system-ui, sans-serif";
+    ctx.fillText((SEALS.size - G.seals) + " / " + SEALS.size + " seals", 240, 214);
+    ctx.fillText(G.moves + " moves", 500, 214);
+    const left = Math.max(0, ROUND_CAP - G.clock);
+    const ratio = G.touched ? left / ROUND_CAP : 1;
+    roundRect(160, 230, 400, 12, 6);
+    ctx.fillStyle = "rgba(255,255,255,0.08)"; ctx.fill();
+    ctx.fillStyle = "#7b8cff";
+    roundRect(160, 230, 400 * ratio, 12, 6); ctx.fill();
+    const m = hitMute();
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.beginPath(); ctx.arc(m.x, m.y, 28, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = "#f3f0ea"; ctx.font = "20px system-ui"; ctx.fillText(SFX.muted() ? "×" : "♪", m.x, m.y + 7);
+    const c = hitCtaPill();
+    ctx.fillStyle = "#f4c430";
+    roundRect(c.x - c.w / 2, c.y - c.h / 2, c.w, c.h, 28); ctx.fill();
+    ctx.fillStyle = "#2a1c04"; ctx.font = "700 22px system-ui, sans-serif"; ctx.fillText("Install", c.x, c.y + 8);
+  }
+
+  function drawBanner() {
+    if (G.banner.a <= 0) return;
+    ctx.save(); ctx.globalAlpha = G.banner.a;
+    ctx.fillStyle = "rgba(12,12,24,0.75)";
+    roundRect(140, 236, 440, 64, 16); ctx.fill();
+    ctx.fillStyle = "#f4c430"; ctx.textAlign = "center";
+    ctx.font = "800 36px system-ui, sans-serif"; ctx.fillText(G.banner.text, 360, 278);
+    ctx.restore();
+  }
+
+  function drawHand() {
+    if (G.phase === "end" || G.busy) return;
+    if (!(!G.touched || G.idle >= HINT_AFTER)) return;
+    const h = hintSwap();
+    if (!h) return;
+    const target = G.selected === h.a ? h.b : h.a;
+    const bounce = Math.sin(G.handT * 6) * 10;
+    const press = (Math.sin(G.handT * 6) + 1) / 2;
+    ctx.save();
+    ctx.translate(target.x + 36, target.y + 16 + bounce);
+    ctx.rotate(-0.5);
+    const s = 1 - press * 0.08; ctx.scale(s, s);
+    ctx.fillStyle = "rgba(0,0,0,0.2)";
+    ctx.beginPath(); ctx.ellipse(8, 16, 26, 12, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#f3d7b8"; ctx.strokeStyle = "rgba(60,30,20,0.45)"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.ellipse(0, -30, 15, 30, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(10, 8, 22, 18, 0.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#3d4ec4";
+    ctx.beginPath(); roundRect(-4, 14, 32, 28, 8); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawEnd() {
+    ctx.fillStyle = "rgba(8,8,16,0.74)"; ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = "center";
+    ctx.fillStyle = G.endKind === "win" ? "#f4c430" : "#ff9b7a";
+    ctx.font = "800 72px system-ui, sans-serif";
+    ctx.fillText(G.endKind === "win" ? "CLEARED" : "ALMOST", 360, 430);
+    ctx.fillStyle = "rgba(243,240,234,0.8)";
+    ctx.font = "500 26px system-ui, sans-serif";
+    ctx.fillText(G.endKind === "win" ? "Every seal has cracked." : "The last seal was one swap away.", 360, 490);
+    const inst = hitInstall();
+    ctx.fillStyle = "#f4c430";
+    roundRect(inst.x - inst.w / 2, inst.y - inst.h / 2, inst.w, inst.h, 48); ctx.fill();
+    ctx.fillStyle = "#2a1c04"; ctx.font = "800 36px system-ui, sans-serif";
+    ctx.fillText("Install", inst.x, inst.y + 13);
+    ctx.fillStyle = "rgba(243,240,234,0.75)";
+    ctx.font = "600 22px system-ui, sans-serif"; ctx.fillText("Replay", 360, 890);
+  }
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    tickTweens(dt); G.handT += dt;
+    if (G.slow > 0) G.slow = Math.max(0, G.slow - dt);
+    if (G.shake > 0) G.shake = Math.max(0, G.shake - dt * 28);
+    if (G.flash > 0) G.flash = Math.max(0, G.flash - dt);
+    if (G.phase !== "end") {
+      G.idle += dt;
+      if (G.touched && G.phase === "play" && !G.busy) {
+        G.clock += dt;
+        if (G.clock >= ROUND_CAP) finish("almost");
+      }
+      if (G.idle >= IDLE_TIMEOUT && G.phase !== "end" && !G.busy) finish("almost");
+    }
+    for (const p of G.fx) { p.s += 80 * dt; p.a -= dt * 2; }
+    G.fx = G.fx.filter((p) => p.a > 0);
+    for (const p of G.confetti) { p.vy += 900 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt; }
+    G.confetti = G.confetti.filter((p) => p.y < H + 40);
+
+    const dpr = canvas.width / W;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.save();
+    if (G.shake) ctx.translate((Math.random() - 0.5) * G.shake, (Math.random() - 0.5) * G.shake);
+    drawBackdrop();
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) drawTile(at(c, r));
+    // also tiles mid-tween that might already be moved - all tiles are in grid
+    for (const f of G.fx) {
+      ctx.globalAlpha = Math.max(0, f.a);
+      ctx.strokeStyle = f.c; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.s, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    drawHud(); drawBanner(); drawHand();
+    if (G.phase === "end") {
+      for (const p of G.confetti) {
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+        ctx.fillStyle = p.c; ctx.fillRect(-p.s / 2, -p.s / 2, p.s, p.s * 0.6); ctx.restore();
+      }
+      drawEnd();
+    }
+    if (G.flash > 0) { ctx.fillStyle = `rgba(255,255,255,${G.flash * 0.4})`; ctx.fillRect(0, 0, W, H); }
+    ctx.restore();
+    requestAnimationFrame(frame);
+  }
+
+  resetAll();
+  requestAnimationFrame(frame);
+
+  window.__QA = {
+    name: "lumen-tiles",
+    phase: () => G.phase,
+    endKind: () => G.endKind,
+    moves: () => G.moves,
+    seals: () => G.seals,
+    busy: () => G.busy,
+    logicalToClient,
+    hint() {
+      const h = hintSwap();
+      if (!h) return null;
+      const target = G.selected === h.a ? h.b : (G.selected === h.b ? h.a : h.a);
+      return {
+        a: { c: h.a.c, r: h.a.r },
+        b: { c: h.b.c, r: h.b.r },
+        selected: G.selected && { c: G.selected.c, r: G.selected.r },
+        point: logicalToClient(target.x, target.y),
+      };
+    },
+    install: () => logicalToClient(hitInstall().x, hitInstall().y),
+    replay: () => logicalToClient(hitReplay().x, hitReplay().y),
+  };
+})();
+</script>
+</body>
+</html>

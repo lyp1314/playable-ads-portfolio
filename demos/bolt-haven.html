@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>Bolt Haven</title>
+  <style>
+    html, body {
+      margin: 0; height: 100%; overflow: hidden; background: #1a1410;
+      touch-action: none; user-select: none; -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    canvas { display: block; position: absolute; touch-action: none; }
+  </style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script>
+(() => {
+  "use strict";
+
+  const W = 720, H = 1280;
+  const STORE_URL = 'https://lyp1314.github.io/playable-ads-portfolio/';
+  const ROUND_CAP = 45;
+  const HINT_AFTER = 2.5;
+  const IDLE_TIMEOUT = 10;
+
+  function installCTA() {
+    try {
+      if (window.FbPlayableAd && typeof window.FbPlayableAd.onCTAClick === "function") {
+        window.FbPlayableAd.onCTAClick(); return "meta";
+      }
+      if (window.ExitApi && typeof window.ExitApi.exit === "function") {
+        window.ExitApi.exit(); return "google";
+      }
+      if (window.mraid && typeof window.mraid.open === "function") {
+        const open = () => window.mraid.open(absoluteStore());
+        if (typeof window.mraid.getState === "function" && window.mraid.getState() === "loading") {
+          window.mraid.addEventListener("ready", open);
+        } else open();
+        return "mraid";
+      }
+    } catch (err) {}
+    window.open(absoluteStore(), "_blank");
+    return "fallback";
+  }
+  function absoluteStore() {
+    try { return new URL(STORE_URL, window.location.href).href; }
+    catch (e) { return STORE_URL; }
+  }
+
+  const SFX = (() => {
+    let ctx = null, gain = null, muted = false, armed = false;
+    function boot() {
+      if (!ctx) {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        gain = ctx.createGain(); gain.gain.value = muted ? 0 : 0.9; gain.connect(ctx.destination);
+      }
+      if (ctx.state === "suspended") ctx.resume();
+      armed = true;
+    }
+    function tone(freq, dur, type, vol, slide) {
+      if (muted || !armed) return;
+      boot();
+      const t = ctx.currentTime, o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = type || "sine";
+      o.frequency.setValueAtTime(freq, t);
+      if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + dur);
+      g.gain.setValueAtTime(vol || 0.08, t);
+      g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+      o.connect(g); g.connect(gain); o.start(t); o.stop(t + dur + 0.02);
+    }
+    return {
+      boot,
+      pull() { tone(140, 0.12, "square", 0.05, 90); tone(320, 0.1, "sine", 0.05); },
+      land() { tone(90, 0.22, "sine", 0.08); },
+      slam() { tone(70, 0.3, "triangle", 0.12, 40); setTimeout(() => tone(180, 0.18, "square", 0.05), 80); },
+      fly() { tone(520, 0.25, "sine", 0.06, 880); },
+      deny() { tone(180, 0.14, "square", 0.04); },
+      win() { [392, 523, 659, 784].forEach((f, i) => setTimeout(() => tone(f, 0.28, "sine", 0.07), i * 95)); },
+      almost() { tone(330, 0.22, "sine", 0.07, 180); },
+      toggle() { muted = !muted; if (gain) gain.gain.value = muted ? 0 : 0.9; return muted; },
+      muted: () => muted,
+    };
+  })();
+
+  const canvas = document.getElementById("stage");
+  const ctx = canvas.getContext("2d");
+  let scale = 1, ox = 0, oy = 0;
+  function fit() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    const cssW = W * scale, cssH = H * scale;
+    ox = (window.innerWidth - cssW) / 2; oy = (window.innerHeight - cssH) / 2;
+    canvas.style.width = cssW + "px"; canvas.style.height = cssH + "px";
+    canvas.style.left = ox + "px"; canvas.style.top = oy + "px";
+    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener("resize", fit); fit();
+  function clientToLogical(cx, cy) {
+    const r = canvas.getBoundingClientRect();
+    return { x: ((cx - r.left) / r.width) * W, y: ((cy - r.top) / r.height) * H };
+  }
+  function logicalToClient(lx, ly) {
+    const r = canvas.getBoundingClientRect();
+    return { x: r.left + (lx / W) * r.width, y: r.top + (ly / H) * r.height };
+  }
+
+  const ease = {
+    out: (t) => 1 - (1 - t) * (1 - t),
+    in: (t) => t * t,
+    inOut: (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2),
+    outBack: (t) => { const c = 1.70158; return (--t) * t * ((c + 1) * t + c) + 1; },
+  };
+  let tweens = [];
+  function tween(obj, to, dur, opt) {
+    const from = {}; Object.keys(to).forEach((k) => (from[k] = obj[k]));
+    tweens.push({ obj, from, to, dur, t: 0, ease: (opt && opt.ease) || ease.out, onDone: opt && opt.onDone });
+  }
+  function after(sec, fn) { tweens.push({ delay: sec, fn, t: 0 }); }
+  function tickTweens(dt) {
+    const keep = [];
+    for (const tw of tweens) {
+      tw.t += dt;
+      if (tw.delay != null) { if (tw.t >= tw.delay) tw.fn(); else keep.push(tw); continue; }
+      const u = Math.min(1, tw.t / tw.dur);
+      const e = tw.ease(u);
+      for (const k of Object.keys(tw.to)) tw.obj[k] = tw.from[k] + (tw.to[k] - tw.from[k]) * e;
+      if (u < 1) keep.push(tw); else if (tw.onDone) tw.onDone();
+    }
+    tweens = keep;
+  }
+
+  /* Rooms are scripted (not a copied physics engine): pull bolts, pieces tween. */
+  function makeLevel1() {
+    return {
+      id: 1,
+      hint: "gate",
+      bolts: [
+        { id: "gate", x: 548, y: 430, alive: true, color: "#d9a441", ring: "#f0d48a" },
+      ],
+      plank: { x: 548, y: 620, w: 36, h: 340, rot: 0, a: 1 },
+      stone: null,
+      shelf: null,
+      door: { open: 0 },
+      bug: { x: 160, y: 860, fly: 0, sad: 0 },
+      shelfReady: true,
+      crushed: false,
+      cleared: false,
+    };
+  }
+  function makeLevel2() {
+    return {
+      id: 2,
+      hint: "shelf",
+      bolts: [
+        { id: "shelf", x: 168, y: 430, alive: true, color: "#d9a441", ring: "#f0d48a" },
+        { id: "stone", x: 360, y: 280, alive: true, color: "#c45c4a", ring: "#f09a84" },
+        { id: "gate", x: 560, y: 620, alive: true, color: "#d9a441", ring: "#f0d48a" },
+      ],
+      plank: null,
+      stone: { x: 360, y: 400, w: 150, h: 110, a: 1 },
+      shelf: { x: 168, y: 620, w: 200, h: 32, placed: false, a: 1 },
+      door: { open: 0 },
+      bug: { x: 360, y: 900, fly: 0, sad: 0 },
+      shelfReady: false,
+      crushed: false,
+      cleared: false,
+    };
+  }
+
+  const G = {
+    phase: "wait", endKind: "win", room: 1,
+    L: null, clock: 0, idle: 0, touched: false,
+    banner: { text: "", a: 0 }, flash: 0, shake: 0, confetti: [],
+    busy: false, handT: 0, dust: [],
+  };
+
+  function showBanner(text, hold) {
+    G.banner.text = text; G.banner.a = 0;
+    tween(G.banner, { a: 1 }, 0.22, {
+      onDone: () => after(hold || 1.0, () => tween(G.banner, { a: 0 }, 0.3)),
+    });
+  }
+
+  function resetAll() {
+    tweens = [];
+    G.phase = "wait"; G.endKind = "win"; G.room = 1;
+    G.L = makeLevel1(); G.clock = 0; G.idle = 0; G.touched = false;
+    G.banner = { text: "", a: 0 }; G.flash = 0; G.shake = 0;
+    G.confetti = []; G.busy = false; G.handT = 0; G.dust = [];
+    showBanner("PULL THE BOLT", 1.5);
+  }
+
+  function armPlay() {
+    if (G.touched) return;
+    G.touched = true; G.phase = "play"; G.idle = 0; SFX.boot();
+  }
+
+  function hintBolt() {
+    const L = G.L;
+    if (!L) return null;
+    const id = L.hint;
+    return L.bolts.find((b) => b.id === id && b.alive) || L.bolts.find((b) => b.alive) || null;
+  }
+
+  function pullBolt(bolt) {
+    if (!bolt || !bolt.alive || G.busy || G.phase === "end") return;
+    bolt.alive = false;
+    SFX.pull();
+    if (G.L.id === 1) pullLevel1(bolt);
+    else pullLevel2(bolt);
+  }
+
+  function pullLevel1() {
+    G.busy = true;
+    const p = G.L.plank;
+    tween(p, { y: 1080, rot: 1.15, a: 0.2 }, 0.55, {
+      ease: ease.in,
+      onDone: () => { SFX.land(); G.L.door.open = 1; flyOut(); },
+    });
+    G.shake = 7;
+  }
+
+  function pullLevel2(bolt) {
+    const L = G.L;
+    if (bolt.id === "shelf") {
+      G.busy = true;
+      tween(L.shelf, { x: 360, y: 780 }, 0.45, {
+        ease: ease.out,
+        onDone: () => {
+          L.shelf.placed = true; L.shelfReady = true; L.hint = "stone";
+          SFX.land(); G.busy = false; puff(360, 790);
+        },
+      });
+      return;
+    }
+    if (bolt.id === "stone") {
+      G.busy = true;
+      if (L.shelfReady) {
+        // highlight: stone slams onto the shelf, bug is safe
+        showBanner("HELD", 0.8);
+        G.flash = 0.55; G.shake = 16;
+        tween(L.stone, { y: 710 }, 0.38, {
+          ease: ease.in,
+          onDone: () => {
+            SFX.slam(); puff(360, 760); L.hint = "gate"; G.busy = false;
+          },
+        });
+      } else {
+        tween(L.stone, { y: 860 }, 0.4, {
+          ease: ease.in,
+          onDone: () => {
+            SFX.slam(); L.crushed = true; L.bug.sad = 1;
+            puff(360, 900); G.shake = 12;
+            after(0.45, () => finish("almost"));
+          },
+        });
+      }
+      return;
+    }
+    if (bolt.id === "gate") {
+      if (!L.shelfReady || L.stone.y < 650) { SFX.deny(); bolt.alive = true; return; }
+      G.busy = true;
+      tween(L.door, { open: 1 }, 0.3, { onDone: () => flyOut() });
+    }
+  }
+
+  function flyOut() {
+    const b = G.L.bug;
+    SFX.fly();
+    tween(b, { x: 610, y: 318, fly: 1 }, 0.85, {
+      ease: ease.inOut,
+      onDone: () => {
+        G.L.cleared = true;
+        if (G.L.id === 1) enterLevel2();
+        else finish("win");
+      },
+    });
+  }
+
+  function enterLevel2() {
+    showBanner("THE LOFT", 1.1);
+    G.flash = 0.4;
+    after(0.7, () => {
+      G.room = 2; G.L = makeLevel2(); G.busy = false;
+    });
+  }
+
+  function puff(x, y) {
+    for (let i = 0; i < 14; i++) {
+      G.dust.push({
+        x, y, vx: (Math.random() - 0.5) * 240, vy: -40 - Math.random() * 160,
+        a: 1, s: 8 + Math.random() * 14,
+      });
+    }
+  }
+
+  function finish(kind) {
+    if (G.phase === "end") return;
+    G.phase = "end"; G.endKind = kind; G.busy = false;
+    if (kind === "win") {
+      SFX.win();
+      for (let i = 0; i < 44; i++) {
+        G.confetti.push({
+          x: W / 2, y: 400, vx: (Math.random() - 0.5) * 500, vy: -180 - Math.random() * 400,
+          rot: Math.random() * 5, vr: (Math.random() - 0.5) * 8,
+          c: ["#d9a441", "#f0d48a", "#e8c9a0", "#c45c4a"][i % 4], s: 8 + Math.random() * 10,
+        });
+      }
+    } else SFX.almost();
+  }
+
+  const hitMute = () => ({ x: 656, y: 56, r: 36 });
+  const hitCtaPill = () => ({ x: 360, y: 1218, w: 280, h: 56 });
+  const hitInstall = () => ({ x: 360, y: 760, w: 420, h: 96 });
+  const hitReplay = () => ({ x: 360, y: 880, w: 280, h: 64 });
+  function inCircle(x, y, c) { return (x - c.x) ** 2 + (y - c.y) ** 2 <= c.r * c.r; }
+  function inBox(x, y, b) { return Math.abs(x - b.x) <= b.w / 2 && Math.abs(y - b.y) <= b.h / 2; }
+
+  function hitBolt(x, y) {
+    for (const b of G.L.bolts) {
+      if (b.alive && (x - b.x) ** 2 + (y - b.y) ** 2 <= 48 * 48) return b;
+    }
+    return null;
+  }
+
+  function onPtr(cx, cy) {
+    const p = clientToLogical(cx, cy);
+    if (inCircle(p.x, p.y, hitMute())) { SFX.toggle(); return; }
+    if (G.phase === "end") {
+      if (inBox(p.x, p.y, hitReplay())) { resetAll(); return; }
+      if (inBox(p.x, p.y, hitInstall()) || p.y > 400) installCTA();
+      return;
+    }
+    if (inBox(p.x, p.y, hitCtaPill())) { installCTA(); return; }
+    armPlay();
+    const b = hitBolt(p.x, p.y);
+    if (b) pullBolt(b);
+    G.idle = 0;
+  }
+  canvas.addEventListener("pointerdown", (e) => { e.preventDefault(); onPtr(e.clientX, e.clientY); });
+
+  function roundRect(x, y, w, h, r) {
+    const rr = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+  }
+
+  function drawBackdrop() {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#3a2a22"); g.addColorStop(0.5, "#241c18"); g.addColorStop(1, "#16110e");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    // window
+    ctx.fillStyle = "#1a2a44";
+    roundRect(450, 248, 180, 180, 12); ctx.fill();
+    const moon = ctx.createRadialGradient(560, 300, 10, 560, 300, 70);
+    moon.addColorStop(0, "rgba(210,230,255,0.7)"); moon.addColorStop(1, "rgba(210,230,255,0)");
+    ctx.fillStyle = moon; ctx.beginPath(); ctx.arc(560, 300, 70, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#5a4034"; ctx.lineWidth = 10;
+    ctx.beginPath(); ctx.moveTo(540, 248); ctx.lineTo(540, 428); ctx.moveTo(450, 338); ctx.lineTo(630, 338); ctx.stroke();
+    // loft floor
+    ctx.fillStyle = "#3b2a22";
+    ctx.fillRect(40, 980, 640, 160);
+    ctx.fillStyle = "#2c201a";
+    ctx.fillRect(40, 980, 640, 18);
+    // walls
+    ctx.fillStyle = "#4a342c";
+    ctx.fillRect(40, 200, 28, 780); ctx.fillRect(652, 200, 28, 780);
+  }
+
+  function drawBug(b) {
+    ctx.save();
+    ctx.translate(b.x, b.y - b.fly * 6);
+    const glow = ctx.createRadialGradient(0, 0, 4, 0, 0, 50);
+    glow.addColorStop(0, "rgba(255, 220, 110, 0.55)");
+    glow.addColorStop(1, "rgba(255, 220, 110, 0)");
+    ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(0, 0, 50, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "rgba(230,240,255,0.45)";
+    ctx.beginPath(); ctx.ellipse(-16, -6, 16, 8, -0.5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(16, -6, 16, 8, 0.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = b.sad ? "#c45c4a" : "#f4d36a";
+    ctx.beginPath(); ctx.arc(0, 4, 16, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#2a1c10";
+    if (b.sad) {
+      ctx.beginPath(); ctx.arc(-5, 2, 2, 0, Math.PI * 2); ctx.arc(5, 2, 2, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.arc(-5, 1, 2.2, 0, Math.PI * 2); ctx.arc(5, 1, 2.2, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawBolt(b) {
+    if (!b.alive) return;
+    ctx.save(); ctx.translate(b.x, b.y);
+    ctx.fillStyle = "rgba(0,0,0,0.3)";
+    ctx.beginPath(); ctx.arc(3, 6, 22, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = b.color;
+    ctx.beginPath(); ctx.arc(0, 0, 22, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = b.ring; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(0, 0, 16, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = "#2a1c10";
+    ctx.fillRect(-8, -3, 16, 6); ctx.fillRect(-3, -8, 6, 16);
+    ctx.restore();
+  }
+
+  function drawRoom() {
+    const L = G.L;
+    // exit hole
+    ctx.fillStyle = "#0d1a2c";
+    ctx.beginPath(); ctx.arc(610, 318, 40, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "rgba(210,230,255,0.35)"; ctx.lineWidth = 3; ctx.stroke();
+    if (L.door && L.door.open < 1 && L.id === 2) {
+      ctx.fillStyle = "#5a4034";
+      roundRect(586, 196, 88, 88 * (1 - L.door.open), 8); ctx.fill();
+    }
+    if (L.shelf) {
+      ctx.save();
+      ctx.globalAlpha = L.shelf.a;
+      ctx.fillStyle = "#8a5a32";
+      roundRect(L.shelf.x - L.shelf.w / 2, L.shelf.y - L.shelf.h / 2, L.shelf.w, L.shelf.h, 6);
+      ctx.fill();
+      ctx.fillStyle = "#c4925a";
+      ctx.fillRect(L.shelf.x - L.shelf.w / 2, L.shelf.y - L.shelf.h / 2, L.shelf.w, 6);
+      ctx.restore();
+    }
+    if (L.plank) {
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, L.plank.a);
+      ctx.translate(L.plank.x, L.plank.y);
+      ctx.rotate(L.plank.rot);
+      ctx.fillStyle = "#8a5a32";
+      roundRect(-L.plank.w / 2, -L.plank.h / 2, L.plank.w, L.plank.h, 6);
+      ctx.fill();
+      ctx.restore();
+    }
+    if (L.stone) {
+      ctx.fillStyle = "#6b6f78";
+      roundRect(L.stone.x - L.stone.w / 2, L.stone.y - L.stone.h / 2, L.stone.w, L.stone.h, 14);
+      ctx.fill();
+      ctx.fillStyle = "#8b9098";
+      roundRect(L.stone.x - L.stone.w / 2 + 12, L.stone.y - L.stone.h / 2 + 10, 50, 20, 6);
+      ctx.fill();
+    }
+    L.bolts.forEach(drawBolt);
+    drawBug(L.bug);
+  }
+
+  function drawHud() {
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f4e6d4";
+    ctx.font = "700 40px system-ui, sans-serif";
+    ctx.fillText("BOLT HAVEN", 360, 118);
+    ctx.font = "500 20px system-ui, sans-serif";
+    ctx.fillStyle = "rgba(244,230,212,0.6)";
+    ctx.fillText(G.room === 1 ? "Free the glow from the loft" : "Shelf first, then the red bolt", 360, 150);
+    const left = Math.max(0, ROUND_CAP - G.clock);
+    const ratio = G.touched ? left / ROUND_CAP : 1;
+    roundRect(160, 178, 400, 16, 8);
+    ctx.fillStyle = "rgba(255,255,255,0.08)"; ctx.fill();
+    ctx.fillStyle = "#d9a441";
+    roundRect(160, 178, 400 * ratio, 16, 8); ctx.fill();
+    ctx.fillStyle = "rgba(244,230,212,0.7)";
+    ctx.font = "600 16px system-ui, sans-serif";
+    ctx.fillText(G.touched ? Math.ceil(left) + "s" : "Tap a bolt", 360, 212);
+    const m = hitMute();
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.beginPath(); ctx.arc(m.x, m.y, 28, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = "#f4e6d4"; ctx.font = "20px system-ui"; ctx.fillText(SFX.muted() ? "×" : "♪", m.x, m.y + 7);
+    const c = hitCtaPill();
+    ctx.fillStyle = "#d9a441";
+    roundRect(c.x - c.w / 2, c.y - c.h / 2, c.w, c.h, 28); ctx.fill();
+    ctx.fillStyle = "#2a1c10"; ctx.font = "700 22px system-ui, sans-serif"; ctx.fillText("Install", c.x, c.y + 8);
+  }
+
+  function drawBanner() {
+    if (G.banner.a <= 0) return;
+    ctx.save(); ctx.globalAlpha = G.banner.a;
+    ctx.fillStyle = "rgba(20,14,10,0.75)";
+    roundRect(140, 500, 440, 88, 20); ctx.fill();
+    ctx.fillStyle = "#f0d48a"; ctx.textAlign = "center";
+    ctx.font = "800 36px system-ui, sans-serif"; ctx.fillText(G.banner.text, 360, 556);
+    ctx.restore();
+  }
+
+  function drawHand() {
+    if (G.phase === "end" || G.busy) return;
+    if (!(!G.touched || G.idle >= HINT_AFTER)) return;
+    const b = hintBolt();
+    if (!b) return;
+    const bounce = Math.sin(G.handT * 6) * 10;
+    const press = (Math.sin(G.handT * 6) + 1) / 2;
+    ctx.save();
+    ctx.translate(b.x + 40, b.y + 10 + bounce);
+    ctx.rotate(-0.5);
+    const s = 1 - press * 0.08; ctx.scale(s, s);
+    ctx.fillStyle = "rgba(0,0,0,0.2)";
+    ctx.beginPath(); ctx.ellipse(8, 16, 26, 12, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#f3d7b8"; ctx.strokeStyle = "rgba(60,30,20,0.45)"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.ellipse(0, -30, 15, 30, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(10, 8, 22, 18, 0.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#5a4034";
+    ctx.beginPath(); roundRect(-4, 14, 32, 28, 8); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawEnd() {
+    ctx.fillStyle = "rgba(12,8,6,0.74)"; ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = "center";
+    ctx.fillStyle = G.endKind === "win" ? "#f0d48a" : "#f09a84";
+    ctx.font = "800 72px system-ui, sans-serif";
+    ctx.fillText(G.endKind === "win" ? "CLEARED" : "ALMOST", 360, 430);
+    ctx.fillStyle = "rgba(244,230,212,0.8)";
+    ctx.font = "500 26px system-ui, sans-serif";
+    ctx.fillText(G.endKind === "win" ? "The glow reached the window." : "The stone dropped a moment too soon.", 360, 490);
+    ctx.save(); ctx.translate(360, 600);
+    ctx.fillStyle = "#f4d36a"; ctx.beginPath(); ctx.arc(0, 0, 22, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    const inst = hitInstall();
+    ctx.fillStyle = "#d9a441";
+    roundRect(inst.x - inst.w / 2, inst.y - inst.h / 2, inst.w, inst.h, 48); ctx.fill();
+    ctx.fillStyle = "#2a1c10"; ctx.font = "800 36px system-ui, sans-serif";
+    ctx.fillText("Install", inst.x, inst.y + 13);
+    ctx.fillStyle = "rgba(244,230,212,0.75)";
+    ctx.font = "600 22px system-ui, sans-serif"; ctx.fillText("Replay", 360, 890);
+  }
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    tickTweens(dt); G.handT += dt;
+    if (G.shake > 0) G.shake = Math.max(0, G.shake - dt * 28);
+    if (G.flash > 0) G.flash = Math.max(0, G.flash - dt);
+    for (const d of G.dust) { d.x += d.vx * dt; d.y += d.vy * dt; d.vy += 200 * dt; d.a -= dt * 1.6; }
+    G.dust = G.dust.filter((d) => d.a > 0);
+    if (G.phase !== "end") {
+      G.idle += dt;
+      if (G.touched && G.phase === "play" && !G.busy) {
+        G.clock += dt;
+        if (G.clock >= ROUND_CAP) finish("almost");
+      }
+      if (G.idle >= IDLE_TIMEOUT && G.phase !== "end" && !G.busy) finish("almost");
+    }
+    for (const p of G.confetti) {
+      p.vy += 900 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
+    }
+    G.confetti = G.confetti.filter((p) => p.y < H + 40);
+    const dpr = canvas.width / W;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.save();
+    if (G.shake) ctx.translate((Math.random() - 0.5) * G.shake, (Math.random() - 0.5) * G.shake);
+    drawBackdrop(); drawRoom();
+    for (const d of G.dust) {
+      ctx.globalAlpha = Math.max(0, d.a); ctx.fillStyle = "#c4b09a";
+      ctx.beginPath(); ctx.arc(d.x, d.y, d.s, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+    }
+    drawHud(); drawBanner(); drawHand();
+    if (G.phase === "end") {
+      for (const p of G.confetti) {
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+        ctx.fillStyle = p.c; ctx.fillRect(-p.s / 2, -p.s / 2, p.s, p.s * 0.6); ctx.restore();
+      }
+      drawEnd();
+    }
+    if (G.flash > 0) { ctx.fillStyle = `rgba(255,240,200,${G.flash * 0.4})`; ctx.fillRect(0, 0, W, H); }
+    ctx.restore();
+    requestAnimationFrame(frame);
+  }
+
+  resetAll();
+  requestAnimationFrame(frame);
+
+  window.__QA = {
+    name: "bolt-haven",
+    phase: () => G.phase,
+    endKind: () => G.endKind,
+    room: () => G.L && G.L.id,
+    busy: () => G.busy,
+    logicalToClient,
+    hint() {
+      const b = hintBolt();
+      if (!b) return null;
+      return { id: b.id, point: logicalToClient(b.x, b.y) };
+    },
+    install: () => logicalToClient(hitInstall().x, hitInstall().y),
+    replay: () => logicalToClient(hitReplay().x, hitReplay().y),
+  };
+})();
+</script>
+</body>
+</html>
