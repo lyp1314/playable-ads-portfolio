@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Buy a Playable Ad · 购买可试玩广告 — Ora Playables</title>
+<style>
+:root{--bg:#0e1016;--paper:#161924;--ink:#efece6;--muted:#9aa0b3;--line:#2a3040;--gold:#e4b84a;--mint:#3ddeb0;--red:#ff6b6b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+main{max-width:720px;margin:0 auto;padding:32px 20px 80px}h1{font-size:26px;margin:0 0 4px}.sub{color:var(--muted);margin:0 0 24px}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px}
+h2{font-size:15px;margin:0 0 12px;color:var(--gold);letter-spacing:.02em}
+.tiers{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.tier{border:1px solid var(--line);border-radius:10px;padding:12px;cursor:pointer}
+.tier input{display:none}.tier:has(input:checked){border-color:var(--gold);background:#1e2230}.tier b{font-size:22px;display:block}.tier small{color:var(--muted)}
+label.f{display:block;margin:10px 0 4px;color:var(--muted);font-size:13px}input[type=text],input[type=email],input[type=url],select{width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:#0f121a;color:var(--ink);font-size:15px}
+button{padding:12px 18px;border-radius:10px;border:0;background:var(--gold);color:#1a1300;font-weight:700;font-size:15px;cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}
+button.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+#log{font:12px/1.6 ui-monospace,monospace;color:var(--muted);white-space:pre-wrap;word-break:break-all}.ok{color:var(--mint)}.err{color:var(--red)}
+#done{display:none}#done a.dl{display:inline-block;margin-top:8px;padding:12px 18px;background:var(--mint);color:#00261b;border-radius:10px;font-weight:700;text-decoration:none}
+.net{font-size:12px;color:var(--muted)}a{color:var(--gold)}
+@media(max-width:560px){.tiers{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+  <h1>Buy a playable ad · 购买可试玩广告</h1>
+  <p class="sub">Pay in USDT on BNB Smart Chain. Your single-file HTML5 ad is generated and delivered automatically the moment the payment confirms.<br>用 BSC 链上的 USDT 付款，链上确认后自动生成并交付广告文件。 <span class="net" id="netLabel"></span></p>
+
+  <div class="card"><h2>1 · Package 套餐</h2><div class="tiers" id="tiers"></div></div>
+
+  <div class="card"><h2>2 · Template & details 模板与信息</h2>
+    <label class="f" for="game">Game template 游戏模板 (<a href="./index.html">preview 预览</a>)</label><select id="game"></select>
+    <label class="f" for="storeUrl">App Store / Google Play URL (optional 可选) — the ad's install button opens this</label>
+    <input id="storeUrl" type="url" placeholder="https://play.google.com/store/apps/details?id=...">
+    <label class="f" for="email">Email (optional 可选) — for a copy of the download link</label>
+    <input id="email" type="email" placeholder="you@example.com">
+  </div>
+
+  <div class="card"><h2>3 · Pay 付款</h2>
+    <div class="row"><button id="connect" class="ghost">Connect wallet 连接钱包</button><span id="acct" class="net"></span></div>
+    <p class="net" id="priceLine"></p>
+    <div class="row"><button id="payBtn" disabled>Approve & pay 授权并付款</button></div>
+    <p class="net">Two wallet prompts: (1) approve exactly the package price in USDT, (2) pay. Funds go straight to the seller's wallet — the contract holds nothing.<br>钱包会弹两次：先授权刚好等于套餐价格的 USDT，再付款。钱直接进卖家钱包，合约不留钱。</p>
+  </div>
+
+  <div class="card" id="done"><h2>✅ Delivered 已交付</h2><p>Your playable ad is ready. 广告已生成：</p><a class="dl" id="dlLink" href="#">Download HTML 下载</a>
+    <p class="net">Save this link — it's unique to your order and works only with the secret key in it. 链接是你订单专属的，请保存。</p><p class="net" id="txLine"></p></div>
+
+  <div class="card"><h2>Status 状态</h2><div id="log">Ready.</div></div>
+</main>
+<script src="./vendor/ethers.umd.min.js"></script>
+<script src="./config.js"></script>
+<script>
+"use strict";
+const C = window.PLAYABLE_PAY_CONFIG;
+const netKey = new URLSearchParams(location.search).get("net") || C.active;
+const NET = C.networks[netKey];
+const $ = id => document.getElementById(id);
+const logEl = $("log");
+function log(msg, cls) { console.log("[checkout] " + msg); const d = document.createElement("div"); if (cls) d.className = cls; d.textContent = msg; if (logEl.textContent === "Ready.") logEl.textContent = ""; logEl.appendChild(d); }
+$("netLabel").textContent = `Network: ${NET ? NET.label + " (chainId " + NET.chainId + ")" : "unknown " + netKey}`;
+
+C.tiers.forEach((t, i) => { $("tiers").insertAdjacentHTML("beforeend",
+  `<label class="tier"><input type="radio" name="tier" value="${t.id}" ${i === 0 ? "checked" : ""}><span>${t.name}</span><b>$${t.usd}</b><small>${t.desc}</small></label>`); });
+C.games.forEach(g => $("game").insertAdjacentHTML("beforeend", `<option value="${g.id}">${g.name}</option>`));
+const pre = new URLSearchParams(location.search).get("game"); if (pre) $("game").value = pre;
+
+const PAY_ABI = ["function pay(bytes32 orderId, uint8 tier)", "function price(uint8) view returns (uint256)", "function paid(bytes32) view returns (bool)", "function usdt() view returns (address)",
+  "event Paid(bytes32 indexed orderId, address indexed buyer, uint8 tier, uint256 amount)"];
+const ERC20_ABI = ["function allowance(address,address) view returns (uint256)", "function approve(address,uint256) returns (bool)", "function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"];
+let provider, signer, account;
+
+function orderFromForm(nonce) {
+  return { tier: Number(document.querySelector("input[name=tier]:checked").value), game: $("game").value,
+    storeUrl: $("storeUrl").value.trim(), email: $("email").value.trim().toLowerCase(), nonce };
+}
+// Must match service/order.mjs exactly.
+function computeOrderId(o) {
+  return ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(
+    ["string", "uint256", "address", "uint8", "string", "string", "string", "bytes32"],
+    ["PlayablePay/v1", NET.chainId, NET.contract, o.tier, o.game, o.storeUrl, o.email, o.nonce])).toLowerCase();
+}
+async function ensureChain() {
+  const hex = "0x" + NET.chainId.toString(16);
+  const cur = await window.ethereum.request({ method: "eth_chainId" });
+  if (cur.toLowerCase() === hex) return;
+  try { await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hex }] }); }
+  catch (e) {
+    if (e.code !== 4902) throw e;
+    await window.ethereum.request({ method: "wallet_addEthereumChain", params: [{ chainId: hex, chainName: NET.label, rpcUrls: [NET.rpc],
+      nativeCurrency: { name: "BNB", symbol: NET.chainId === 56 ? "BNB" : "tBNB", decimals: 18 }, blockExplorerUrls: NET.explorer ? [NET.explorer] : [] }] });
+  }
+}
+async function refreshPrice() {
+  if (!NET || !NET.contract) { $("priceLine").textContent = "Checkout not configured for this network yet. 此网络尚未配置合约。"; return; }
+  try {
+    const rp = provider || new ethers.JsonRpcProvider(NET.rpc);
+    const pay = new ethers.Contract(NET.contract, PAY_ABI, rp);
+    const tier = orderFromForm().tier; const p = await pay.price(tier);
+    $("priceLine").textContent = `On-chain price 链上价格: ${ethers.formatUnits(p, 18)} USDT`;
+  } catch (e) { $("priceLine").textContent = "Could not read price: " + (e.shortMessage || e.message); }
+}
+document.querySelectorAll("input[name=tier]").forEach(r => r.addEventListener("change", refreshPrice));
+
+$("connect").onclick = async () => {
+  try {
+    if (!window.ethereum) { log("No wallet found. Install MetaMask / OKX / Binance Web3 Wallet, or open this page in your wallet's browser. 未检测到钱包。", "err"); return; }
+    await window.ethereum.request({ method: "eth_requestAccounts" });
+    await ensureChain();
+    provider = new ethers.BrowserProvider(window.ethereum); signer = await provider.getSigner(); account = await signer.getAddress();
+    $("acct").textContent = account; $("payBtn").disabled = !NET.contract || !NET.api; log("Wallet connected: " + account, "ok"); refreshPrice();
+  } catch (e) { log("Connect failed: " + (e.shortMessage || e.message), "err"); }
+};
+
+$("payBtn").onclick = async () => {
+  $("payBtn").disabled = true;
+  try {
+    await ensureChain();
+    const nonce = ethers.hexlify(crypto.getRandomValues(new Uint8Array(32)));
+    const o = orderFromForm(nonce);
+    if (o.storeUrl && !/^https?:\/\//i.test(o.storeUrl)) throw new Error("Store URL must start with https:// 链接需以 https:// 开头");
+    const orderId = computeOrderId(o);
+    // 1) register order details with the delivery service (it re-computes and checks the hash)
+    const r = await fetch(NET.api + "/order", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...o, orderId }) });
+    const j = await r.json(); if (!r.ok || j.orderId !== orderId) throw new Error("Order registration failed: " + (j.error || r.status));
+    localStorage.setItem("pp:" + orderId, JSON.stringify({ ...o, orderId, net: netKey }));
+    log("Order " + orderId + " registered.");
+    // 2) approve exact price, 3) pay
+    const pay = new ethers.Contract(NET.contract, PAY_ABI, signer);
+    const usdt = new ethers.Contract(NET.usdt || await pay.usdt(), ERC20_ABI, signer);
+    const price = await pay.price(o.tier);
+    if (price === 0n) throw new Error("Tier disabled");
+    const bal = await usdt.balanceOf(account);
+    if (bal < price) throw new Error(`Not enough USDT: have ${ethers.formatUnits(bal, 18)}, need ${ethers.formatUnits(price, 18)}`);
+    if ((await usdt.allowance(account, NET.contract)) < price) {
+      log("Approve " + ethers.formatUnits(price, 18) + " USDT… 请在钱包中确认授权");
+      const a = await usdt.approve(NET.contract, price); await a.wait(); log("Approved: " + a.hash, "ok");
+    }
+    log("Paying… 请在钱包中确认付款");
+    const tx = await pay.pay(orderId, o.tier); log("Pay tx sent: " + tx.hash);
+    const rc = await tx.wait(); if (rc.status !== 1) throw new Error("Payment reverted");
+    log("Payment confirmed in block " + rc.blockNumber + " ✔ 付款已上链", "ok");
+    $("txLine").textContent = "Tx: " + tx.hash; if (NET.explorer) $("txLine").innerHTML = `Tx: <a target="_blank" rel="noopener" href="${NET.explorer}/tx/${tx.hash}">${tx.hash}</a>`;
+    // 4) wait for the watcher to deliver
+    log("Waiting for automatic delivery… 等待自动交付");
+    for (let i = 0; i < 150; i++) {
+      const s = await (await fetch(NET.api + "/status/" + orderId)).json();
+      if (s.delivered) {
+        const link = `${NET.api}/download/${orderId}?k=${nonce}`;
+        $("dlLink").href = link; $("done").style.display = "block"; log("Delivered: " + link, "ok"); return;
+      }
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    log("Delivery is taking longer than usual. Keep this page's link; your order is saved in this browser. 交付较慢，请稍后刷新。", "err");
+  } catch (e) { log("Error: " + (e.shortMessage || e.reason || e.message), "err"); $("payBtn").disabled = false; }
+};
+refreshPrice();
+</script>
+</body>
+</html>
